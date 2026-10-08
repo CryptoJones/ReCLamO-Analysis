@@ -78,10 +78,30 @@ impl Provider for OpenAICompatProvider {
             .map_err(|e| ReclamoError::Provider { provider: "openai-compat".into(), message: e.to_string() })?;
 
         let status = resp.status();
-        let raw = resp
-            .text()
-            .await
-            .map_err(|e| ReclamoError::Provider { provider: "openai-compat".into(), message: e.to_string() })?;
+        // Read the body chunk-by-chunk instead of `.text()` / `.bytes()`.
+        // Both call `BodyExt::collect`, which on rustls + HTTP/1.1 can
+        // fail with Kind::Decode on certain Cloudflare-fronted OpenRouter
+        // responses (verified 2026-10-08: nemotron-3.5-lightning:free
+        // returns 200 OK + chunked + leading whitespace prelude bytes
+        // that the chunked decoder chokes on; nemotron-3-super-120b:free
+        // does not). Streaming through `chunk()` and concatenating
+        // matches what `curl -i` shows. The fix is empirical — the
+        // underlying transport bug is upstream.
+        let mut raw_bytes: Vec<u8> = Vec::new();
+        let mut resp = resp;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => raw_bytes.extend_from_slice(&chunk),
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(ReclamoError::Provider {
+                        provider: "openai-compat".into(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+        let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
 
         if !status.is_success() {
             return Err(ReclamoError::Provider {
@@ -229,7 +249,10 @@ struct ChatResponse {
 #[derive(Debug, Deserialize)]
 struct WireError {
     message: String,
+    // Captured so the JSON parse doesn't drop the field, but the harness
+    // only needs the message today.
     #[serde(default)]
+    #[allow(dead_code)]
     code: Option<serde_json::Value>,
 }
 

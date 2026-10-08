@@ -19,7 +19,22 @@ path = "src/lib.rs"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# `gzip` is needed because OpenRouter (and most production gateways) send
+# `Content-Encoding: gzip` on responses above ~10 KB; without it reqwest's
+# body reader returns "error decoding response body" (Kind::Decode) instead
+# of the actual upstream JSON. Discovered on nemotron-3.5-lightning:free
+# smoke (60 KB context) 2026-10-08.
+#
+# `http2` matters because with rustls + HTTP/1.1 only, the Cloudflare-
+# fronted OpenRouter response for nemotron-3.5-lightning:free arrives as
+# `HTTP/1.1 200 OK Transfer-Encoding: chunked` and the body starts with
+# literal leading whitespace + 9-space padding lines
+# (`b"\n         \n\n         \n..."`); the chunked decoder fails on those.
+# The same request over HTTP/2 (which `curl -i` shows) works because
+# HTTP/2 framing has no Transfer-Encoding: chunked and the body is just
+# DATA frames. Verified 2026-10-08 by reading the first chunk of the
+# response body through `Response::chunk()`.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

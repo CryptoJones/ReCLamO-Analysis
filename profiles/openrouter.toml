@@ -15,9 +15,9 @@
 # rather than switching keys.
 #
 # Model examples (set $MODEL in the launching shell, or pass --model):
-#   nvidia/nemotron-nano-9b-v2:free            — 128K ctx, reasoning
-#   inclusionai/ling-3.1-flash:free            — 262K ctx
-#   openai/gpt-oss-20b:free                    — 131K ctx (OpenAI open-weight)
+#   nvidia/nemotron-3-super-120b-a12b:free      — 262K ctx, reasoning
+#   inclusionai/ling-3.1-flash:free             — 262K ctx
+#   openai/gpt-oss-20b:free                     — 131K ctx (OpenAI open-weight)
 
 name = "openrouter"
 provider = "openai-compat"
@@ -37,6 +37,19 @@ resident_kv = 80_000
 subcall_chars = 8_000
 temperature = 0.7
 top_p = 0.95
+
+# Disable the model's native reasoning channel by default. The peer's
+# 2026-10-08 #19 bench found that Nemotron and similar models spend
+# most of the per-turn output budget on a reasoning preamble, then
+# either hit `length` (plain path) or leave no room for a ```repl fence
+# (harness path) — they end up emitting hallucinated tool_call JSON
+# in `content` instead. Disabling reasoning gives the model the full
+# 4K output to spend on content the harness can actually parse.
+# Reasoning can be re-enabled per-profile (delete this field) for
+# models that have shown it improves answers (e.g. Qwen 3 8B on Strata).
+# Inline table form keeps it as a top-level field; a [extra_body] header
+# would silently absorb base_url and api_key_cmd below.
+extra_body = { reasoning = { enabled = false } }
 
 # OpenAI-compat base.
 base_url = "https://openrouter.ai/api/v1"
