@@ -4,14 +4,30 @@
 //! anywhere in the prompt; instead, the loop interpolates values from
 //! [`ModelProfile`] and [`CapabilitySet`].
 //!
-//! Implements NEXT-STEPS fixes 2, 3, 4 at the prompt layer:
+//! ## Prompt version: v0.2
+//!
+//! The current template (`src/prompts/system_prompt.template`) ports upstream
+//! rlm's `RLM_SYSTEM_PROMPT` + `ORCHESTRATOR_ADDENDUM` (rlm/utils/prompts.py
+//! on `rlm main`):
+//!
 //! - **Commit-early** — the prompt tells the model to populate
 //!   `answer["content"]` from the first turn and update it on every useful
 //!   intermediate result.
-//! - **Un-scare delegation** — the real budget is stated; "use sub-calls
-//!   for judgement, not for line-by-line scanning." (The Qwen warning about
-//!   "expensive / one-at-a-time / hard cap" is gone — it was the reason
-//!   `llm_query` fired in only 5/40 runs.)
+//! - **Orchestrator role** — the upstream ORCHESTRATOR_ADDENDUM is appended
+//!   (six paragraphs verbatim): act as an orchestrator, not a solver; plan
+//!   the decomposition explicitly before delegating; say when NOT to
+//!   delegate; keep your own context clean (delegate long reads to sub-LLMs);
+//!   two-axis sub-call budget (~100K chars/prompt capacity, ~20 prompts/batch
+//!   fan-out); reserve your own tokens for high-level decisions.
+//! - **No delegation deterrent** — the v0.1 "use sub-calls for judgement, not
+//!   for line-by-line scanning" / "DELEGATION RULES" section (the Qwen3-Coder
+//!   patch from ReCLamO-Harness) is gone. The paper's main prompt (App. C.1
+//!   1a) says sub-LLMs are "strongly encouraged to use as much as possible…
+//!   don't be afraid to put a lot of context into them." v0.1 had the
+//!   deterrent and `llm_query` fired in only 5/40 runs.
+//! - **One big sub-call allowed** — the WORKFLOW section no longer nudges
+//!   against passing a slice larger than the per-call chunk size when it fits
+//!   the sub-model's window.
 //! - **Multi-hop helper** — REPL bootstrap exposes a generic
 //!   `extract_event_table(text, regex)` helper, callable from any model.
 //!
@@ -19,6 +35,12 @@
 //! `router.rs` and `rlm.rs`, not here.
 
 use crate::providers::{CapabilitySet, ModelProfile};
+
+/// System-prompt template version. Bump on every meaningful template change
+/// so the eval rig can attribute eval deltas to prompt edits. The eval
+/// runner reads this string and stamps it into each cell's `prompt_version`
+/// field (see `examples/eval.rs`).
+pub const PROMPT_VERSION: &str = "v0.2";
 
 /// The built system prompt.
 pub struct SystemPrompt {
@@ -237,5 +259,60 @@ mod tests {
     fn user_message_warns_docker() {
         let m = build_user_message("q", 2, 20, 0, 64, false, 0, "docker");
         assert!(m.contains("network none"));
+    }
+
+    #[test]
+    fn prompt_version_constant_is_v0_2() {
+        assert_eq!(PROMPT_VERSION, "v0.2");
+    }
+
+    #[test]
+    fn prompt_default_subcall_chars_interpolates_20_000() {
+        // With the v0.2 default the prompt must mention 20,000 — not 12,000.
+        let p = profile(8192, 20_000);
+        let caps = CapabilitySet::openai_compat();
+        let s = build_system_prompt(PromptInputs { profile: &p, caps: &caps });
+        assert!(s.text.contains("20,000"), "prompt did not interpolate 20,000 default; got:\n{}", s.text);
+        assert!(!s.text.contains("12,000"));
+    }
+
+    #[test]
+    fn prompt_contains_orchestrator_addendum() {
+        let p = profile(8192, 20_000);
+        let caps = CapabilitySet::openai_compat();
+        let s = build_system_prompt(PromptInputs { profile: &p, caps: &caps });
+        // Section marker must be present.
+        assert!(s.text.contains("ORCHESTRATOR ROLE"));
+        // Every paragraph of the upstream addendum must be present, in order,
+        // at least by its first sentence.
+        assert!(s.text.contains("act as an orchestrator, not a solver"));
+        assert!(s.text.contains("pause and plan"));
+        assert!(s.text.contains("Your own context window is small"));
+        assert!(s.text.contains("Sub-LLMs have no REPL"));
+        assert!(s.text.contains("Sub-call budget is finite on two independent axes"));
+        assert!(s.text.contains("Reserve your own tokens for high-level decisions"));
+    }
+
+    #[test]
+    fn prompt_does_not_contain_v0_1_delegation_deterrent() {
+        let p = profile(8192, 20_000);
+        let caps = CapabilitySet::openai_compat();
+        let s = build_system_prompt(PromptInputs { profile: &p, caps: &caps });
+        // The Qwen3-Coder-only "use sub-calls for judgement, not for line-by-line
+        // scanning" / "DELEGATION RULES" patch is gone in v0.2.
+        assert!(!s.text.contains("DELEGATION RULES"));
+        assert!(!s.text.contains("use them for judgement, not for line-by-line scanning"));
+        assert!(!s.text.contains("Use them for judgement, not for line-by-line scanning"));
+        assert!(!s.text.contains("Spend them on judgement"));
+    }
+
+    #[test]
+    fn prompt_workflow_allows_one_big_subcall() {
+        let p = profile(8192, 20_000);
+        let caps = CapabilitySet::openai_compat();
+        let s = build_system_prompt(PromptInputs { profile: &p, caps: &caps });
+        // v0.1 said "state the per-call chunk size" which nudged against
+        // fat-prompt sub-calls. v0.2 explicitly allows a larger slice.
+        assert!(s.text.contains("larger slice in a single sub-call"));
     }
 }

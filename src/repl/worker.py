@@ -24,7 +24,7 @@ Protocol (JSON Lines on stdin/stdout):
 Helper bootstrap (matches the prompt):
 
 - ``commit(text)`` writes to ``answer['content']``.
-- ``llm_query(prompt, *, subcall_chars=12_000)`` is **wired** — it round-
+- ``llm_query(prompt, *, subcall_chars=20_000)`` is **wired** — it round-
   trips a sub-call through the orchestrator's provider and returns the
   string. **Never** raises ``NotImplementedError``; if the orchestrator
   cannot dispatch (e.g. test-only stub), it raises ``HarnessError``.
@@ -149,7 +149,7 @@ def _run_exec(
     err_message = ""
     subcalls: list[dict[str, Any]] = []
 
-    def llm_query(prompt: str, *, subcall_chars: int = 12_000) -> str:
+    def llm_query(prompt: str, *, subcall_chars: int = 20_000) -> str:
         if not isinstance(prompt, str):
             prompt = str(prompt)
         if len(prompt) > subcall_chars:

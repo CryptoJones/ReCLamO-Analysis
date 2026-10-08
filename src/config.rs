@@ -65,7 +65,7 @@ pub struct Profile {
 }
 
 fn default_subcall_chars() -> u32 {
-    12_000
+    20_000
 }
 fn default_temperature() -> f64 {
     0.7
@@ -114,7 +114,7 @@ pub struct LoopConfigToml {
 }
 
 fn default_max_iterations() -> u32 {
-    20
+    30
 }
 fn default_max_timeout() -> u64 {
     600
@@ -364,17 +364,26 @@ mod tests {
         "#;
         let p: Profile = toml::from_str(toml).unwrap();
         assert_eq!(p.loop_config.max_iterations, 10);
-        assert_eq!(p.subcall_chars, 12_000);
+        assert_eq!(p.subcall_chars, 20_000);
         assert_eq!(p.thinking, ThinkingMode::Adaptive);
     }
 
     #[test]
-    fn loop_config_defaults_match_paper() {
+    fn loop_config_defaults_match_upstream_rlm_v0_2() {
         let c: LoopConfig = LoopConfigToml::default().into();
-        assert_eq!(c.max_iterations, 20);
+        // Upstream rlm: _DEFAULT_MAX_ITERATIONS = 30.
+        assert_eq!(c.max_iterations, 30);
         assert_eq!(c.max_errors, 3);
         assert_eq!(c.max_subcalls_per_run, 64);
         assert_eq!(c.max_subcalls_per_exec, 24);
+    }
+
+    #[test]
+    fn profile_default_subcall_chars_matches_repl_truncation() {
+        // The Python REPL's `llm_query` truncates at `subcall_chars` by default
+        // (see src/repl/worker.py). The TOML default must match, otherwise the
+        // prompt tells the model one number and the runtime enforces another.
+        assert_eq!(default_subcall_chars(), 20_000);
     }
 
     #[test]
@@ -389,7 +398,7 @@ mod tests {
             api_key_cmd: None,
             max_context: 100_000,
             resident_kv: None,
-            subcall_chars: 12_000,
+            subcall_chars: 20_000,
             temperature: 0.7,
             top_p: 0.95,
             top_k: None,

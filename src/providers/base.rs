@@ -281,7 +281,7 @@ impl ModelProfile {
             provider,
             max_context,
             resident_kv: max_context,
-            subcall_chars: 12_000,
+            subcall_chars: 20_000,
             presence_penalty: None,
             thinking: ThinkingMode::Adaptive,
             temperature: 0.7,
