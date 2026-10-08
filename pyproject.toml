@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "reclamo-anl"
+version = "0.0.0"
+description = "Model-agnostic recursive language model harness (companion to CryptoJones/ReCLamO-Harness)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [
+  { name = "CryptoJones" },
+]
+dependencies = [
+  "openai>=1.50.0",
+  "anthropic>=0.39.0",
+  "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.6.0",
+]
+
+[project.scripts]
+reclamo-anl = "reclamo.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reclamo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S"]
+ignore = [
+  "S101",  # allow `assert` in tests (we don't ship tests in the wheel)
+  "S104",  # allow binding 0.0.0.0 in dev profiles
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "live: hits a real provider (skipped in CI by default)",
+]
