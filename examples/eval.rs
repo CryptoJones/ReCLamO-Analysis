@@ -228,17 +228,22 @@ impl std::fmt::Debug for EvalCfg {
 
 impl EvalCfg {
     fn to_model_profile(&self, provider: Arc<dyn Provider>) -> ModelProfile {
-        let mut p = ModelProfile::new(self.provider.clone(), provider, self.max_context);
-        // Pull `resident_kv` from the TOML profile if one was passed; the
-        // router uses it to decide plain-vs-harness. Defaulting to
-        // `max_context` (CLI's 200K) silently disables the route-by-size
-        // check on models with larger caps, so medium and large always
-        // take the plain path even when the profile asked for harness.
+        // v0.2 followup: when a TOML profile is passed, defer to
+        // `Profile::model_profile` so the eval rig honors the same
+        // `subcall_chars` derivation (and the bumped caps, thinking
+        // mode, etc.) that the production loop sees. Without this the
+        // eval was building a `ModelProfile` with `ModelProfile::new`'s
+        // 20K default and never reading the profile's intent.
         if let Some(path) = &self.profile_path {
             if let Ok(profile) = Profile::from_path(path) {
-                p.resident_kv = profile.resident_kv.unwrap_or(self.max_context);
+                return profile.model_profile(provider);
             }
         }
+        // No TOML profile — fall back to the CLI's max_context.
+        let mut p = ModelProfile::new(self.provider.clone(), provider, self.max_context);
+        // `resident_kv` defaults to `max_context` here. The router uses
+        // it to decide plain-vs-harness; defaulting to `max_context` is
+        // honest when no profile was given.
         p.thinking = ThinkingMode::Adaptive;
         p
     }
