@@ -147,14 +147,27 @@ pub async fn run(
 
         // Resolve a FINAL/FINAL_VAR first, if present and not rejected.
         if let (Some(intent), None) = (parsed.final_intent.as_ref(), parsed.reject_reason.as_ref()) {
-            let answer = match intent {
-                FinalIntent::Final(v) => v.clone(),
-                FinalIntent::FinalVar(name) => lookup_var(repl.as_mut(), name).await?,
+            let (answer, stop_reason) = match intent {
+                FinalIntent::Final(v) => (v.clone(), "final_var".to_string()),
+                FinalIntent::FinalVar(name) => match lookup_var(repl.as_mut(), name).await {
+                    Ok(v) => (v, "final_var".to_string()),
+                    // The model wrote FINAL_VAR(X) but X doesn't exist in
+                    // the REPL. This is a model mistake, not a harness
+                    // crash — record the bad stop and let the eval rig
+                    // score it as 0.0 instead of terminating the run.
+                    // (The previous `?` propagated the lookup error out
+                    // of `rlm::run` entirely, which made a non-trivial
+                    // fraction of harness cells on gemini-2.5-flash-lite
+                    // crash the eval rig mid-grid; the per-row JSONL was
+                    // truncated to whichever cell happened to land on a
+                    // missing variable first. Seen 2026-10-08.)
+                    Err(_) => (String::new(), format!("final_var_invalid:{}", name)),
+                },
             };
             return Ok(RunResult {
                 answer,
                 mode: "harness:fence".into(),
-                stop_reason: "final_var".into(),
+                stop_reason,
                 tokens: stats.tokens,
                 seconds: started.elapsed().as_secs_f64(),
                 turns: stats.turns,
@@ -514,6 +527,34 @@ mod tests {
         opts.route_mode = RouteMode::Harness;
         let res = completion("tiny".into(), "q".into(), profile, opts).await.unwrap();
         assert_eq!(res.mode, "harness:fence", "explicit Harness must bypass the router");
+    }
+
+    #[tokio::test]
+    async fn harness_final_var_missing_var_does_not_crash_run() {
+        // The model writes `FINAL_VAR(missing)` and the REPL has no such
+        // variable. The loop must NOT propagate the lookup error out of
+        // `completion()` — that previously crashed the eval rig mid-grid
+        // on gemini-2.5-flash-lite (and likely any non-deterministic
+        // model on tasks that don't bind a final-var). The new contract:
+        // `stop_reason` is `final_var_invalid:<name>`, `answer` is empty,
+        // and the call returns Ok so the eval rig scores it as 0.0.
+        use crate::completion::{completion, RouteMode};
+        let scripted = vec![Completion {
+            content: "```repl\n# this commit is irrelevant\n```\nFINAL_VAR(missing_var)".into(),
+            reasoning: None,
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+        }];
+        let profile = make_profile(scripted);
+        let mut opts = CompletionOpts::default();
+        opts.route_mode = RouteMode::Harness;
+        let res = completion("tiny context".into(), "q".into(), profile, opts)
+            .await
+            .expect("run() must not propagate lookup_var Err for a missing variable");
+        assert_eq!(res.mode, "harness:fence");
+        assert_eq!(res.stop_reason, "final_var_invalid:missing_var");
+        assert_eq!(res.answer, "");
     }
 
     #[tokio::test]

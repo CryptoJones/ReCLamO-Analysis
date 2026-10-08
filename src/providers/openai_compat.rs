@@ -148,6 +148,21 @@ impl Provider for OpenAICompatProvider {
             reasoning = stripped_thinking;
         }
 
+        // Per-turn audit log: every completion the harness sees.
+        // Useful for catching fence-parser slips (some models emit
+        // `<tool_call>repl ...</tool_call>` inside `content` with
+        // `tool_calls` empty; the peer's 2026-10-08 fix runs only
+        // the first such block and discards the rest). Off by default
+        // (`RUST_LOG=info,reclamo_anl::providers::openai_compat=debug`).
+        tracing::debug!(
+            model = %self.model,
+            finish = %choice.finish_reason.as_str(),
+            tool_calls = tool_calls.len(),
+            content_bytes = content.len(),
+            has_tool_call_block = content.contains("tool_call") || content.contains("<tool_call>"),
+            "completion"
+        );
+
         let usage = parsed.usage.map(|u| super::base::Usage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,

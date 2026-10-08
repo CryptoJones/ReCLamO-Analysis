@@ -107,6 +107,17 @@ struct GenOutput {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    // Init tracing so per-turn audit logs (RUST_LOG=debug for
+    // `reclamo_anl::providers::openai_compat`) are visible. Default
+    // to `info`; the eval rig itself doesn't emit many `info`s.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
     let cfg = parse_args(&args)?;
     eprintln!("config: {cfg:?}");
