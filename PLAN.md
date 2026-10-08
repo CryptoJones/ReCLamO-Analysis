@@ -46,64 +46,116 @@ A model-agnostic ReCLamO that:
 
 ## Architecture
 
-### Provider abstraction (`src/reclamo/providers/`)
+### Provider abstraction (`src/providers/`)
 
-One interface, two implementations:
+One trait, three implementations:
 
-```python
-class Provider(Protocol):
-    name: str
-    def complete(self, messages, *, tools=None, **opts) -> Completion: ...
-    def capabilities(self) -> "CapabilitySet": ...
+```rust
+#[async_trait]
+pub trait Provider: Send + Sync {
+    fn name(&self) -> &'static str;
+    async fn complete(&self, messages: &[Message], tools: Option<&[serde_json::Value]>, opts: CompleteOpts)
+        -> Result<Completion, ReclamoError>;
+    fn capabilities(&self) -> CapabilitySet;
+    fn model_id(&self) -> &str;
+}
 ```
 
-- `AnthropicProvider` — Messages API. Native thinking, tool use, prompt caching via `cache_control`.
-- `OpenAICompatProvider` — universal; works against Strata, Ollama, vLLM, LM Studio, OpenRouter, OpenAI native. A pluggable `thinking_extension` handles the cross-vendor differences (`chat_template_kwargs` for Qwen, `reasoning_effort` for OpenAI, `extra_body` passthrough for everything else).
-- Capability detection (`CapabilitySet`): `supports_thinking`, `supports_tool_use`, `supports_json_mode`, `supports_prefix_cache`, `known_reasoning_format`. Loops and prompts branch on capabilities, not on model name.
+- `AnthropicProvider` — Messages API direct via reqwest. Native thinking
+  blocks, tool use, prompt caching via `cache_control`.
+- `OpenAICompatProvider` — universal; works against Strata, Ollama, vLLM,
+  LM Studio, OpenRouter, OpenAI native. The body builder is hand-rolled
+  JSON so vendor-specific fields (`chat_template_kwargs` for Qwen,
+  `reasoning_effort` for OpenAI o-series, `extra_body` passthrough for
+  everything else) pass through cleanly without fighting a typed SDK.
+- `MockProvider` — scripted responses for tests, capability override.
+- Capability detection (`CapabilitySet`): `supports_thinking`,
+  `supports_tool_use`, `supports_json_mode`, `supports_prefix_cache`,
+  `known_reasoning_format: ReasoningFormat`. Loops and prompts branch on
+  capabilities, not on model name.
 
-### Reasoning adapter (`src/reclamo/providers/reasoning.py`)
+### Reasoning adapter (`src/providers/reasoning.rs`)
 
 One function, all formats:
 
-```python
-def extract_reasoning(raw: dict, fmt: ReasoningFormat) -> tuple[str, str | None]:
-    """Returns (clean_visible_content, reasoning_or_none)."""
+```rust
+pub fn extract_think_tags(text: &str) -> (String, Option<String>);
+/* plus the Anthropic provider decodes native `thinking` blocks from content[],
+   plus the OpenAI-compat provider decodes `reasoning_content` on the way in */
+```
 
-ReasoningFormat ∈ {`think_tags`, `reasoning_field`, `native_blocks`, `none`}
+`ReasoningFormat ∈ { ThinkTags, ReasoningField, NativeBlocks, None }`.
 
 Handles:
-- `<think>…</think>` strip (Strata/Qwen/etc.)
-- `reasoning_content` field fallback when content is empty (Strata, OpenRouter)
+- `<think>…</think>` strip (Strata / Qwen / OpenAI o-series / DeepSeek)
+- `reasoning_content` field fallback when content is empty (Strata,
+  OpenRouter, DeepSeek R1)
 - Anthropic native `thinking` blocks
 - Plain text (no-op)
 
 The rest of the codebase never sees the difference.
 
-### Capability profile (one dataclass, drives prompt + loop)
+### Capability profile (one struct, drives prompt + loop)
 
-```python
-@dataclass
-class ModelProfile:
-    name: str                            # human-readable
-    provider: Provider
-    max_context: int                     # effective window
-    resident_kv: int                     # for compaction threshold (Strata = 32K, Anthropic = depends)
-    subcall_chars: int = 12_000          # prompt's "batch ~N chars per call"
-    presence_penalty: float | None = None  # only for repetitive-loops models
-    thinking: ThinkingMode = "auto"      # on / off / auto (per-call)
+```rust
+pub struct ModelProfile {
+    pub name: String,
+    pub provider: Arc<dyn Provider>,
+    pub max_context: u64,
+    pub resident_kv: u64,                  // for compaction threshold
+    pub subcall_chars: u32,                // prompt's "batch ~N chars per call"
+    pub presence_penalty: Option<f64>,
+    pub thinking: ThinkingMode,
+    // ... sampling defaults ...
+}
 ```
 
-Each provider ships a default profile. The prompt knows `profile.subcall_chars`; the loop knows `profile.max_context` and `profile.resident_kv`; the reasoning adapter is fed `provider.capabilities().known_reasoning_format`.
+Each profile ships a default profile. The prompt knows `profile.subcall_chars`;
+the loop knows `profile.max_context` and `profile.resident_kv`; the reasoning
+adapter is fed `provider.capabilities().known_reasoning_format`.
 
-### The loop — mostly v0.1, with five folds-in
+### The loop — v0.1 with five folds-in
 
-The v0.1 loop is fine; the bugs are pinned at the prompt/edge-handling layer. So the v2 loop is the v0.1 loop with five one-spot patches:
+The v0.1 loop is fine; the bugs are pinned at the prompt/edge-handling layer.
+The Rust loop is the v0.1 design with five one-spot patches:
 
-1. **Route by size.** Before `RLM.completion()` starts, measure `len(context_tokens)`. If it fits `profile.max_context - query_margin`, return a plain single-shot completion from the same provider with the same prompt minus the REPL section. One file: `src/reclamo/router.py`.
-2. **Commit early.** REPL bootstrap sets `answer["content"] = ""` and a tiny helper `commit(text: str)` that updates it. The first turn's instructions say "After each useful intermediate result, `commit(...)` it into `answer`. Don't wait." Smell test: the prompt and the answer-tracking are visible from turn 1.
-3. **Late nudges.** At ~60 % and ~85 % of `max_iterations`, the system prompt injects one final nudge: "If you're not making progress, `commit` your best answer. If `answer['content']` looks right, `FINAL_VAR(answer)`."
-4. **Un-scare delegation.** Replace the v0.1 "expensive / one-at-a-time / hard cap" warnings with the real budget: "You have `max_subcalls_per_run` sub-calls available (default 64). Use them for judgement, not for line-by-line scanning." Add a regex-futility detector that nudges after N turns where the regex produced no matches and didn't progress the answer.
-5. **Forced-finish unification.** All four termination triggers (`max_iterations`, `max_timeout`, `max_tokens`, `max_errors`) go through one forced-finish path: ask the model once with a snapshot of `answer` and `vars`, demand a `FINAL_VAR(answer)` (if `answer["content"]` is non-empty) or a fallback `final_answer = "I could not determine the answer"`. Never return code verbatim. Never return a stale variable named `final_answer / answer_text / result / final` — look those up, take the value, drop the name.
+1. **Route by size.** Before `rlm::run` starts, measure
+   `len(context_chars)/3.5 + len(query_chars)/3.5`. If it fits
+   `profile.resident_kv - plain_query_margin`, return a plain single-shot
+   completion from the same provider with the same prompt minus the REPL
+   section. One file: `src/router.rs`.
+2. **Commit early.** REPL bootstrap sets `answer["content"] = ""` and
+   exposes `commit(text)` and `SHOW_VARS()` helpers. The system prompt
+   tells the model "after each useful intermediate result, `commit(...)` it
+   into `answer`. Don't wait." — visible from turn 1.
+3. **Late nudges.** At ~60 % and ~85 % of `max_iterations`, the user
+   message injects one final nudge: "If you're not making progress,
+   `commit` your best answer. If `answer['content']` looks right,
+   `FINAL_VAR(answer)`."
+4. **Un-scare delegation.** Replace the v0.1 "expensive / one-at-a-time
+   / hard cap" warnings with the real budget: "You have
+   `max_subcalls_per_run` sub-calls available (default 64). Use them
+   for judgement, not for line-by-line scanning." A regex-futility
+   detector in `rlm::count_fruitless_regex` nudges after 3 empty turns.
+5. **Forced-finish unification.** All four termination triggers
+   (`max_iterations`, `max_timeout`, `max_tokens`, `max_errors`) go
+   through one `rlm::forced_finish` path: ask the model once with a
+   snapshot of the REPL state, demand a `FINAL_VAR(answer)` (if
+   `answer["content"]` is non-empty) or a fallback `FINAL(<one line>)`.
+   Never return code verbatim. Never return a stale variable name —
+   look it up, take the value, drop the name.
+
+### REPL split
+
+The REPL is a Python subprocess (vendored `worker.py` via `include_str!`)
+because Python stdlib gives us regex / json / csv for free and matches
+v0.1's worker exactly. The orchestrator is Rust.
+
+- Phase 1 ships `InMemoryRepl` only (scripted closures, no Python process).
+  Test surfaces: `MockProvider` round-trips, parser, prompts — without
+  requiring `python3` on PATH.
+- Phase 2 wires `SubprocessRepl::spawn` into `repl::default_client` so the
+  loop sees a real worker.
 
 ### Eval rig — copy the discipline
 
@@ -113,20 +165,20 @@ The v0.1 loop is fine; the bugs are pinned at the prompt/edge-handling layer. So
 - Aggregations: per (model, task family, size); per cell; per row.
 - Cross-mode comparisons: harness vs plain on cells where plain fits; harness-only on the rest.
 
-The eval rig is **separate** from the harness package — `evals/` directory, not under `src/reclamo/`.
+The eval rig is **separate** from the crate — `evals/` directory, not under `src/`.
 
 ## Phases (this is also the BACKLOG seed)
 
-| # | Phase | What ships | Notes |
+| # | Phase | What ships | Status |
 |---|---|---|---|
-| 1 | Scaffold | `pyproject.toml`, `src/reclamo/{config,providers/{base,anthropic,openai_compat},providers/reasoning,client,parsing,prompts,router,logger}.py`, `reclamo --version` | Make sure the package even builds. No REPL yet. |
-| 2 | Loop + REPL | `src/reclamo/{rlm,repl/worker,repl/subprocess_repl}.py`, `reclamo run` | MVP. Routes-by-size (fix 1) included. |
-| 3 | Five fixes | Edit prompts/loop to fold in fixes 2–5, no public API change | Smoke eval on three cells before/after. |
-| 4 | Eval rig | `evals/{run_eval.py, freeze_manifest.py}`, README on how to pin generators | Replay of v0.1 frozen eval must produce the same numbers. |
-| 5 | First model | Run eval against **Anthropic** (sonnet family) on a small/medium slice | Sanity-check the abstraction. |
-| 6 | Second model | OpenAI-compatible (one of Ollama local; OpenRouter free; vLLM if reachable) | Catches provider-interface bugs. |
-| 7 | Full eval | All 8 tasks × 3 sizes × 2 seeds × 2 providers, both modes | Write up. |
-| 8 | Write the postcard | `RESULTS.md` with the table | This is the artifact CJ cares about. |
+| 1 | Scaffold | `Cargo.toml`, `src/{config,parsing,prompts,router,logger,cli}.rs`, `src/providers/{base,anthropic,openai_compat,mock,reasoning}.rs`, `src/repl/{mod,in_memory_repl,subprocess_repl,worker.py}`, `reclamo-anl --version` | **SHIPPED 2026-10-08** (55/55 unit tests green) |
+| 2 | Loop + REPL | Wire `SubprocessRepl` into `default_client`; let the model emit `llm_query`/`llm_query_batched`; end-to-end against a small needle task | next |
+| 3 | Five fixes | Verify the five fixes on a smoke eval; tune the prompt wording if any fail the smoke test | after 2 |
+| 4 | Eval rig | `evals/{freeze_manifest,run_eval}.rs` (or `.py` for the visualizer path); JSONL trajectory reader | after 3 |
+| 5 | First model | Anthropic Sonnet family on a small/medium slice | after 4 |
+| 6 | Second model | OpenAI-compatible (Ollama local / OpenRouter free / vLLM) | after 5 |
+| 7 | Full eval | All 8 tasks × 3 sizes × 2 seeds × 2 providers, both modes | after 6 |
+| 8 | Write up | `RESULTS.md` with the table | after 7 |
 
 After every phase: OMI note "phase N complete" so the next session doesn't re-derive.
 
@@ -152,46 +204,42 @@ A phase fails if its smoke eval regresses vs the previous phase.
 - `BACKLOG.md` seeded from this plan; will mirror the GitHub Issues tab once the repo is published.
 - Per the project's tag-line rule: README banner carries the Nebraska line.
 
-## File layout (planned)
+## File layout (live)
 
 ```
-src/reclamo/
-  __init__.py
-  cli.py                 # `reclamo run`, `reclamo ping`, `reclamo version`
-  config.py              # dataclass config, TOML profiles (kept v0.1-compatible shape)
-  client.py              # v0.1 default-key resolver; not model-specific
+src/
+  cli.rs                 # `reclamo-anl run`, `reclamo-anl ping`, `reclamo-anl version`
+  config.rs              # TOML profiles + LoopConfig defaults
+  completion.rs          # top-level entry — routes by size, then plain or loop
+  parsing.rs             # finds ```repl / ```python / ``` blocks; detects FINAL/FINAL_VAR
+  prompts.rs             # system prompt builder; reads prompts/system_prompt.template
+  prompts/system_prompt.template
+  router.rs              # plain-vs-harness routing (fix #1)
+  logger.rs              # JSONL trajectory schema (kept close to v0.1)
+  error.rs               # typed ReclamoError::LimitHit / Provider / Repl / Io / ...
+  rlm.rs                 # the loop, all 5 fixes folded in
   providers/
-    base.py              # Provider Protocol, CapabilitySet, ModelProfile
-    anthropic.py
-    openai_compat.py
-    reasoning.py         # the one normalize function
-    registry.py          # `--provider anthropic|openai-compat` → class
-  parsing.py             # finds ```repl / ```python / ```tool blocks; detects answer
-  prompts.py             # ONE prompt builder fed capability flags, not model name
+    mod.rs
+    base.rs              # Provider trait, CapabilitySet, ModelProfile, types
+    anthropic.rs         # Messages API direct via reqwest
+    openai_compat.rs     # universal OpenAI-shape, hand-rolled JSON
+    mock.rs              # scripted responses for tests
+    reasoning.rs         # extract_think_tags  (the one normalize function)
   repl/
+    mod.rs               # ReplClient trait + Box blanket impl
+    in_memory_repl.rs    # Phase-1 default (no Python process needed)
+    subprocess_repl.rs   # Phase-2 client; vendored worker.py
     worker.py            # vendored from v0.1, no Qwen assumptions
-    subprocess_repl.py
-  rlm.py                 # the loop, all 5 fixes folded in
-  router.py              # plain-vs-harness routing
-  logger.py              # JSONL trajectory schema (kept close to v0.1)
-  errors.py              # typed limits with `partial_answer`
 
 evals/
-  freeze_manifest.py     # sha256-pin generators + answer keys
-  run_eval.py            # cells × modes × seeds matrix; writes RESULTS.md
+  freeze_manifest.rs     # sha256-pin generators + answer keys
+  run_eval.rs            # cells × modes × seeds matrix; writes RESULTS.md
   cells/                 # frozen generators (re-exported from v0.1 frozen eval)
 
 examples/
-  needle.py
-  oolong_lite.py
-  longdoc_qa.py
-
-tests/
-  test_providers.py      # reasoning-format normalizer unit tests
-  test_parsing.py
-  test_router.py
-  test_prompts.py        # capability-driven prompt diff
-  test_rlm.py            # with MockProvider end to end
+  needle.rs
+  oolong_lite.rs
+  longdoc_qa.rs
 
 profiles/
   qwen-pluto.toml        # example profile using Strata via OpenAICompat
