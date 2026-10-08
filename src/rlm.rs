@@ -28,6 +28,16 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Appended to the message history when the model emits a turn with
+/// no code and no FINAL/FINAL_VAR. Mirrors ReCLamO-Harness fix #5
+/// (PR #52 in the Python harness). Before this, an empty turn just
+/// `continue`d silently and the prompt's late nudges — which only
+/// fire at ≥60% of max_iterations — were the only signal.
+const NO_CODE_NO_FINAL_NUDGE: &str = "\
+That message had no code and no final answer. \
+Reply with exactly one ```repl code block (or ```python), \
+or `FINAL(...)` / `FINAL_VAR(...)`.";
+
 pub async fn run(
     context: String,
     query: String,
@@ -187,14 +197,29 @@ pub async fn run(
 
         // No FINAL: run the code blocks.
         if parsed.code_blocks.is_empty() {
-            // No code, no FINAL — count this as a no-op turn. The prompt's
-            // late nudges catch this from turn ≥ ceil(max_iters * 0.6).
+            // No code, no FINAL. The Python harness's ReCLamO-Harness fix
+            // #5 (PR #52) appends a corrective breadcrumb here; before
+            // that, the empty turn just `continue`d and the prompt's late
+            // nudges were the only signal — and those only fire at
+            // ≥60% of max_iterations. The breadcrumb fires every time.
+            // (Seen 2026-10-08 on GLaDOS large gemini seed 0 harness:
+            // the model emitted `final_var` on turn 1 without ever
+            // sampling the context; no nudge ever fired.)
+            messages.push(Message::user(NO_CODE_NO_FINAL_NUDGE));
             continue;
         }
 
         let mut made_progress = false;
         let mut consecutive_errors = 0u32;
-        for block in &parsed.code_blocks {
+        // Run only the FIRST code block when a reply contains several.
+        // The Python harness's ReCLamO-Harness fix #4 (PR #52) keeps
+        // `parsed.code_blocks[:1]`; without this, a model that emits
+        // multiple ```repl fences (or, on the Poolside Laguna slip,
+        // ~12 <tool_call> blocks with fabricated REPL output between
+        // them) gets every fence executed, including the faked output.
+        // The `TurnLine.parsed_code_blocks` field already records N so
+        // the drop is visible in the trajectory (parsed N, executed 1).
+        for block in parsed.code_blocks.iter().take(1) {
             let exec = repl.execute(&block.code).await?;
             if exec.error.is_some() {
                 consecutive_errors += 1;
@@ -580,5 +605,37 @@ mod tests {
         assert_eq!(res.mode, "plain");
         assert_eq!(res.stop_reason, "does_not_fit");
         assert_eq!(res.answer, "");
+    }
+
+    #[test]
+    fn no_code_no_final_nudge_mentions_required_patterns() {
+        // The corrective message must point the model at the three
+        // acceptable reply shapes (```repl, ```python, or a final).
+        // ReCLamO-Harness fix #5 (PR #52) uses a near-identical string.
+        assert!(NO_CODE_NO_FINAL_NUDGE.contains("```repl"));
+        assert!(NO_CODE_NO_FINAL_NUDGE.contains("```python"));
+        assert!(NO_CODE_NO_FINAL_NUDGE.contains("FINAL"));
+        assert!(NO_CODE_NO_FINAL_NUDGE.contains("FINAL_VAR"));
+    }
+
+    #[test]
+    fn loop_take_one_executable_block_when_response_has_many() {
+        // ReCLamO-Harness fix #4: when `parse_response` returns N
+        // code blocks, the loop must execute only the first and drop
+        // the rest. We test the selection logic directly here without
+        // driving the full loop, because exercising the loop with
+        // SubprocessRepl is an integration test (Python on PATH) and
+        // the InMemoryRepl fallback in `run()` doesn't execute code.
+        let txt = "```repl\ncommit('first')\n```\n\
+                   sep prose\n\
+                   ```repl\ncommit('second')\n```\n\
+                   more sep\n\
+                   ```python\nx = 3\n```";
+        let parsed = crate::parsing::parse_response(txt);
+        assert_eq!(parsed.code_blocks.len(), 3, "parser must see all 3 blocks");
+        // The selection is `parsed.code_blocks.iter().take(1)` — mirror it.
+        let selected: Vec<&_> = parsed.code_blocks.iter().take(1).collect();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].code, "commit('first')");
     }
 }
