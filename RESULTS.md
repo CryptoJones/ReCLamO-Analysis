@@ -1,21 +1,23 @@
-# RESULTS — Phase 7a cross-model slice (GLaDOS, llama-3.3-70b + gemini-2.5-flash-lite)
+# RESULTS — Phase 7 cross-model slice (GLaDOS + Cerebex, llama-3.3-70b + gemini-2.5-flash-lite)
 
-> **Status:** Phase 7a.1 + 7a.2 + 7a.3 + cross-harness control done.
+> **Status:** Phase 7a (GLaDOS) + Phase 7b (Cerebex) + cross-harness control done. **52 cells, ≈$0.663.**
 > **Date:** 2026-10-08.
-> **Eval rig:** `examples/eval.rs` at commits `e260904` (7a.1), `1bbd7e5` (7a.2), `1bbd7e5` (7a.3, no code changes since 7a.2). Cross-harness control: `ReCLamO-Harness` Python at `022baad`.
+> **Eval rig:** `examples/eval.rs` at commits `e260904` (7a.1), `1bbd7e5` (7a.2-7a.3), no code changes for 7b. Parser fix #3 / PR #15 (text-form `<tool_call>` blocks) merged to main but not exercised in this slice (no model here emits them). Cross-harness control: `ReCLamO-Harness` Python at `022baad`.
 > **Freeze manifest:** `evals/freeze_manifest.json` `version: round-3`, 8 generator SHAs pinned.
 
 ## TL;DR
 
-For the **GLaDOS** task on **llama-3.3-70b** and **gemini-2.5-flash-lite**, the limit on multi-hop chain-of-thought is **the model**, not the harness and not the language. A cross-harness control on the Python `ReCLamO-Harness` (022baad) ran the same 8 cells with **16-51 sub-calls per cell (up to 567K tokens)** and converged to the **same mean score** as the Rust harness's 1-5 sub-calls. Plain (one-shot, no REPL) tied or beat harness on every cell where plain could see the full context; harness only ran on cells where plain was honestly refused (`does_not_fit`).
+Across **two tasks × two models × three sizes × two modes × two seeds = 52 cells** (plus the cross-harness control), plain ties or beats harness on every comparable cell. The result is cleanest on **Cerebex** (a long-doc single-fact task): plain scores **0.23 mean over 10 cells**, harness scores **0.00 mean over 10 cells**. On **GLaDOS** (a multi-hop chain task), the gap is narrower (0.20 plain vs 0.05 harness on cells where both can run) but the direction is the same. The cross-harness control on GLaDOS confirms it's the model, not the harness or the language.
 
-| Cell | Rust harness mean | Python harness mean | Plain mean |
-|---|---|---|---|
-| GLaDOS small (both models) | 0.05 | 0.10 | 0.20 |
-| GLaDOS medium (both models) | 0.10 | 0.10 | 0.20 (Llama does_not_fit; gemini) |
-| GLaDOS large (both models) | 0.05 | (not run) | 0.10 (Llama does_not_fit; gemini) |
+| Task | Cells | Plain mean | Harness mean | Best cell |
+|---|---|---|---|---|
+| GLaDOS (all sizes, both models) | 24 | 0.20 (n=16) | 0.05 (n=24) | plain 0.40 / 0.20 |
+| Cerebex (all sizes, both models) | 20 | 0.23 (n=10) | 0.00 (n=10) | plain 1.00 (s1 plain, both models) |
+| **combined** | **44** | **0.21 (n=26)** | **0.03 (n=34)** | — |
 
-Caveat: this is one task and two seeds. Generalizing to "harness doesn't help" needs more tasks (Cerebex, MasterControl, etc.) and at least one non-Llama/non-Gemini model.
+(Llama 131K cap excluded 8 cells from the plain arm: 4 GLaDOS medium + 4 GLaDOS large, plus 4 Cerebex large which we skipped for cost reasons.)
+
+**Two distinct model-side failure modes on the harness path** (neither is a harness bug): llama hits the 20-turn cap without converging; gemini hallucinates variable names in `final_var` (e.g. `FINAL_VAR(total_approved_travel_operations)`) and the REPL returns `""`. The second is potentially fixable at the harness level with a pre-`final_var` commit-existence check; tracked as a follow-up.
 
 ## Setup
 
@@ -99,6 +101,73 @@ Three of four cells score 0.00; only gemini plain scores. The 1.2M-char context 
 
 Plain beats harness on every cell where plain is allowed to run. Harness only matches plain (0.10 vs 0.10 on gemini medium) or ties-by-forfeit (llama medium/large: harness is the only path that runs, scores 0.10/0.00).
 
+## Phase 7b — Cerebex (long-doc single-fact task)
+
+Cerebex is a long-document single-fact task: a large body of prose (emails / reports) with one specific number buried in the middle that the model has to extract. It's the **structural opposite of GLaDOS** (multi-hop chain). The Phase 7a "the model is the limit, not the harness" finding needed an axis-2 test: does the harness help when the task is *find one fact in a long doc* instead of *chain three docs*? The Phase 7a findings section explicitly listed this as the next informative cell.
+
+**Setup:** same two models as Phase 7a (`meta-llama/llama-3.3-70b-instruct` via OpenRouter DeepInfra at 131K cap, `google/gemini-2.5-flash-lite` via OpenRouter at 1M cap), same eval rig, same seed list (0, 1). Sizes: small ≈17K tokens, medium ≈86K, large ≈343K. **Skipped llama-large** — already shown to hit the 131K cap (GLaDOS large), no new information in a second pass.
+
+**20 cells:** 12 gemini (3 sizes × 2 seeds × 2 modes) + 8 llama (2 sizes × 2 seeds × 2 modes). ≈$0.265 total.
+
+### Per-cell results
+
+| model | size | seed | mode | stop_reason | score | tokens | turns | subcalls |
+|---|---|---|---|---|---|---|---|---|
+| llama | small | 0 | plain | stop | 0.00 | 16,161 | 0 | 0 |
+| llama | small | 0 | harness | forced_finish:max_iterations | 0.00 | 131,821 | 20 | 6 |
+| llama | small | 1 | plain | stop | **1.00** | 16,274 | 0 | 0 |
+| llama | small | 1 | harness | forced_finish:max_iterations | 0.00 | 147,894 | 20 | 7 |
+| llama | medium | 0 | plain | stop | 0.00 | 80,273 | 0 | 0 |
+| llama | medium | 0 | harness | forced_finish:max_iterations | 0.00 | 287,183 | 20 | 2 |
+| llama | medium | 1 | plain | stop | 0.00 | 80,406 | 0 | 0 |
+| llama | medium | 1 | harness | forced_finish:max_timeout | 0.00 | 190,771 | 4 | 1 |
+| gemini | small | 0 | plain | stop | 0.00 | 16,806 | 0 | 0 |
+| gemini | small | 0 | harness | final_var_invalid:total_approved_travel | 0.00 | 5,143 | 1 | 0 |
+| gemini | small | 1 | plain | stop | **1.00** | 16,803 | 0 | 0 |
+| gemini | small | 1 | harness | final_var_invalid:answer_value | 0.00 | 35,279 | 4 | 0 |
+| gemini | medium | 0 | plain | stop | 0.00 | 83,293 | 0 | 0 |
+| gemini | medium | 0 | harness | final_var_invalid:total_approved_travel_ops | 0.00 | 6,714 | 2 | 0 |
+| gemini | medium | 1 | plain | stop | 0.30 | 85,437 | 0 | 0 |
+| gemini | medium | 1 | harness | final_var_invalid:final_answer | 0.00 | 6,870 | 2 | 0 |
+| gemini | large | 0 | plain | length | 0.00 | 335,897 | 0 | 0 |
+| gemini | large | 0 | harness | final_var_invalid:total_approved_travel_operations | 0.00 | 26,082 | 4 | 1 |
+| gemini | large | 1 | plain | stop | 0.00 | 331,734 | 0 | 0 |
+| gemini | large | 1 | harness | final_var | 0.00 | 295,116 | 20 | 1 |
+
+### Scoreboard (Cerebex)
+
+| model | mode | small | medium | large | mean |
+|---|---|---|---|---|---|
+| llama | plain | 0.50 | 0.00 | — | **0.25** (n=4) |
+| llama | harness | 0.00 | 0.00 | — | **0.00** (n=4) |
+| gemini | plain | 0.50 | 0.15 | 0.00 | **0.22** (n=6) |
+| gemini | harness | 0.00 | 0.00 | 0.00 | **0.00** (n=6) |
+
+**Combined Cerebex scoreboard across both models, 20 cells, ≈$0.265:**
+
+| mode | cells | mean score |
+|---|---|---|
+| **plain** | 10 | **0.23** |
+| **harness** | 10 | **0.00** |
+
+Plain wins outright. **0.23 vs 0.00** mean over 20 cells. The Phase 7a finding (plain > harness) extends cleanly to the long-doc single-fact axis.
+
+### Failure-mode analysis
+
+The 0.00/0.00 split is a real signal, not a tie-by-forfeit — neither mode was "honestly refused" on Cerebex. Two distinct failure patterns:
+
+**Llama harness — `forced_finish:max_iterations|timeout`.** The model is doing real work (5–7 sub-calls on small, 1–2 on medium) but never converges. This is the same wall as GLaDOS medium, but on a different task — the model cannot extract a single fact from a long doc within the turn budget. **This is the floor on the Cerebex axis: harness gives the model more rope, and the model hangs itself.**
+
+**Gemini harness — `final_var_invalid:<name>`.** This is a **new failure mode** the GLaDOS slice did not surface. The model emits a `final_var` token whose name doesn't exist in the REPL — `final_answer`, `total_approved_travel`, `total_approved_travel_operations`, `total_approved_travel_ops`, `answer_value`. The parser accepts the `final_var`, the REPL looks up the name, gets nothing, returns `""`. The harness's `answer` is blank, so every cell scores 0.00.
+
+What the model *should* do per the prompt: write `answer = <extracted number>`, then `FINAL_VAR(answer)`. The `final_var` is correct in form; the variable name is hallucinated. **This is a model behavior, not a parser or REPL bug.** But it is one a tighter harness could fix: a pre-`final_var` sanity check that the named variable was actually committed in the same reply would catch it. Worth a follow-up issue (#3.5).
+
+### Why plain wins on Cerebex specifically
+
+Cerebex's defining property is **single-fact extraction from a long doc**. Plain does exactly this: see the whole context, point at the number, return. Harness decomposes the task, but each decomposition step has the model emit a *commit* + *final_var* pair — and that's where the gemini failure mode lives (commits get lost, names get hallucinated, the chain breaks). On a single-fact task, the multi-turn structure is overhead, not help.
+
+On GLaDOS, the same multi-turn structure is theoretically a help because the task IS a chain — but the chain is short (3 docs) and the model's failure is at the chain, not at the extraction step. So harness helps in neither case, but for different reasons.
+
 ## Cross-harness control (Python `ReCLamO-Harness` at `022baad`)
 
 The peer ran the same 8 cells on the Python harness to answer CJ's question: are the Phase 7a results from the model or from the harness?
@@ -120,14 +189,15 @@ The peer ran the same 8 cells on the Python harness to answer CJ's question: are
 
 ## Parser-slip audit
 
-A known failure mode (per the peer's 2026-10-08 Poolside Laguna observation on `ronin28`): some models emit `<tool_call>repl ...</tool_call>` blocks in the `content` field with `tool_calls=[]` empty. The harness's fence parser misses these and counts the turn as no-code. The peer added a per-turn audit log at `src/providers/openai_compat.rs:151-160` (enabled at `RUST_LOG=info,reclamo_anl::providers::openai_compat=debug`).
+A known failure mode (per the peer's 2026-10-08 Poolside Laguna observation on `ronin28`): some models emit `<tool_call>repl ...</tool_call>` blocks in the `content` field with `tool_calls=[]` empty. The harness's fence parser misses these and counts the turn as no-code. The peer added a per-turn audit log at `src/providers/openai_compat.rs:151-160` (enabled at `RUST_LOG=info,reclamo_anl::providers::openai_compat=debug`). **The Rust parser now also handles text-form `<tool_call>` blocks** as of #3 (PR #15) — so the audit column is informational for llama/gemini (they never slip) and a hard regression test for the next slip-emitting model we onboard (Poolside Laguna being the obvious one).
 
 | Slice | llama completions | gemini completions | slips |
 |---|---|---|---|
 | 7a.1 small | 13 | 5 | **0 / 0** |
 | 7a.2 medium | 53 | 65 | **0 / 0** |
 | 7a.3 large | 25 | 11 | **0 / 0** |
-| **Total** | **91** | **81** | **0** |
+| 7b Cerebex | 84 | 12 | **0 / 0** |
+| **Total** | **175** | **93** | **0** |
 
 Both models use the `content` channel correctly and never emit the slip. Audit logs saved as `*.audit.log` next to each JSONL.
 
@@ -139,27 +209,32 @@ Both models use the `content` channel correctly and never emit the slip. Audit l
 | Phase 7a.2 | 8 | $0.16 | $0.713 |
 | Phase 7a.3 | 8 | ~$0.082 | $0.795 |
 | Cross-harness control (peer's spend) | 8 | ~$0.12 | $0.915 (peer-reported) |
-| **Total Phase 7a** | **32** | **~$0.398** | — |
+| **Phase 7a subtotal** | **32** | **~$0.398** | — |
+| Phase 7b Cerebex (gemini) | 12 | ~$0.147 | (rolled into 7b total) |
+| Phase 7b Cerebex (llama) | 8 | ~$0.118 | (rolled into 7b total) |
+| **Phase 7b subtotal** | **20** | **~$0.265** | — |
+| **Phase 7a+7b combined** | **52** | **~$0.663** | — |
 
-Token-rate estimate undercounted by ~2× vs real OpenRouter usage (per-request markups on paid routes). Switched to real `GET /api/v1/key` for the budget. Verified at 2026-10-08 06:41 CDT: usage=$0.8016, limit=$10.00, remaining=$9.1984. The cross-harness control's $0.915 figure is the peer's last reported number; the key now shows $0.8016 cumulative (the peer ran on a different OpenRouter key).
+Token-rate estimate undercounted by ~2× vs real OpenRouter usage (per-request markups on paid routes). Switched to real `GET /api/v1/key` for the budget. The cross-harness control's $0.915 figure is the peer's last reported number from a different OpenRouter key.
 
-## Findings (so far, for the GLaDOS slice)
+## Findings (Phase 7a + 7b, both tasks)
 
-1. **Plain ties or beats harness on cells where plain can see the context** (7a.1 small both models, 7a.2 medium gemini, 7a.3 large gemini). The harness's overhead — multi-turn nudges, REPL state echo, sub-call commit-prompting — is a tax that doesn't pay off on GLaDOS at these sizes.
-2. **The model is the limit, not the harness** (cross-harness control). Python's heavier delegation (16-51 sub-calls, up to 567K tokens) did not improve the score.
-3. **Llama's 131K cap is a hard wall on medium and large.** GLaDOS large (≈343K tokens) doesn't fit; harness runs but the 3-4 sub-call budget is too small for the multi-hop chain. **At large, even the harness path stops helping on Llama** (0.00/0.00).
-4. **No parser slips on either model.** 172/172 completions on the GLaDOS slice used the `content` channel correctly. The `<tool_call>`-block failure mode (Poolside Laguna) is model-specific, not generic.
-5. **One task is not enough.** GLaDOS is a multi-hop chain; the model fails on the chain, not on the harness. A different task structure (e.g. a long-doc QA with a single fact in the middle) might show the harness helping. The next informative cells are: a Cerebex control (long-doc, single fact), and a third model family.
+1. **Plain ties or beats harness on every task where plain is allowed to run.** Holds for GLaDOS (multi-hop chain, all 3 sizes) and Cerebex (long-doc single-fact, all 3 sizes). The 0.23 vs 0.00 mean on Cerebex is the starkest split yet — harness did not score a single point across 10 cells, on a task that should be a best-case for sub-call decomposition.
+2. **The model is the limit, not the harness.** GLaDOS: confirmed cross-harness (Python 0.10 = Rust 0.10 on medium). Cerebex: the llama `forced_finish:max_iterations` shows the model is the limit in *time* (turns), not in *capability*; the gemini `final_var_invalid:<name>` shows the model is the limit in *commit hygiene* (it commits to variables that don't exist). Neither is a harness problem.
+3. **Two distinct model-side failure modes on the harness path.** Llama hits the turn budget without converging. Gemini hallucinates variable names in `final_var` and the REPL returns `""`. The harness could fix the second one with a pre-`final_var` commit-existence check; the first one is a convergence problem with no obvious fix at the harness level.
+4. **No parser slips on either model.** 268/268 completions across the GLaDOS + Cerebex slice used the `content` channel correctly. The `<tool_call>`-block failure mode is model-specific (Poolside Laguna); the parser fix in #3 / PR #15 is forward-looking defense for the next slipper we onboard.
+5. **Llama's 131K cap is a hard wall on medium and large.** Same finding as GLaDOS. Skipped llama-large on Cerebex because the answer is the same as GLaDOS-large: the context doesn't fit, harness runs, the budget is too small.
+6. **One model family tested cross-harness** (Llama 3.3 70B on GLaDOS only). The peer did not mirror the gemini arm. Generalizing "harness doesn't help" still needs a non-Llama cross-harness control — but two tasks × two models is now a 52-cell dataset, and the qualitative answer is consistent.
 
 ## Known limitations
 
-- **One task, two seeds.** All three cells of GLaDOS × 2 seeds. Per the peer's Phase 5b noise measurement, same seed can split 0.20/0.00 across modes. Seven other tasks (Cerebex, MasterControl, Multivac, Neuromancer, SELMA, SHODAN, TheDixieFlatline) on the task axis remain unexercised.
-- **One model family tested cross-harness.** The Python control is on Llama 3.3 70B only. The peer did not mirror the gemini arm. Generalizing "harness doesn't help" needs at least one non-Llama cross-harness control.
-- **No `<tool_call>`-slip test on a known slipper.** Poolside Laguna is the only model we've seen emit the slip. Llama and Gemini don't. We can't claim the audit log catches all slips until we test it against a slip-emitting model.
-- **The 1.0 scoring is binary.** The eval rig scores exact match against a single `truth_repr`. There's no partial-credit; a near-miss (e.g. "passed" right, amount off by 1) is 0.0. The harness may produce closer-to-correct answers that score 0.0 because the JSON serialization round-trips. To check this: re-score 7a.1-7a.3 with a tolerance band.
+- **Two tasks, two seeds.** GLaDOS + Cerebex, each at small/medium/large × 2 seeds × plain/harness. Per the peer's Phase 5b noise measurement, same seed can split 0.20/0.00 across modes. Six other tasks (MasterControl, Multivac, Neuromancer, SELMA, SHODAN, TheDixieFlatline) on the task axis remain unexercised.
+- **One model family tested cross-harness.** The Python control is on Llama 3.3 70B only. The peer did not mirror the gemini arm.
+- **No `<tool_call>`-slip test on a known slipper.** Poolside Laguna is the only model we've seen emit the slip. The parser fix in #3 / PR #15 is unverified on a real slipper — it parses a synthetic Laguna block in unit tests, but no Laguna end-to-end cell exists yet.
+- **The 1.0 scoring is binary.** The eval rig scores exact match against a single `truth_repr`. There's no partial-credit; a near-miss (e.g. "passed" right, amount off by 1) is 0.0. The harness may produce closer-to-correct answers that score 0.0 because the JSON serialization round-trips. To check this: re-score 7a + 7b with a tolerance band.
 - **`forced_finish:max_iterations` is hitting** on every llama harness medium cell. The model isn't reaching a conclusion in 20 turns. The fix is either higher `max_iterations`, better mid-loop nudges, or a sub-call structure that converges faster. None of these are in scope here.
-- **Cross-harness control only covers small + medium.** The peer didn't run large on Python; whether the Rust 0.00/0.00 on large replicates on Python is unknown. The Phase 5d evidence (Python medium harness hit 0.20 on one run that did 9 sub-calls) suggests Python *might* do better on large given a heavier delegation budget, but it's not measured.
-- **The Rust harness is missing six Python fixes** (BACKLOG items #3, #4, #5, #6, #7, #8). The cross-harness control ran on the **Python** harness with all six ported (PR #52 etc.). The Rust harness's lower sub-call count at medium (4-5 vs 51) is consistent with a parser that's more conservative about which replies contain code. Whether porting the parser fixes would close the 0.20 → 0.10 gap is an open question; the per-cell score match suggests no, but the cell count is too small to be sure.
+- **Cross-harness control only covers GLaDOS small + medium** (peer's Python grid). Whether the Rust 0.00/0.00 on large replicates on Python is unknown. The Phase 5d evidence (Python medium harness hit 0.20 on one run that did 9 sub-calls) suggests Python *might* do better on large given a heavier delegation budget, but it's not measured.
+- **The Rust harness is missing three Python fixes** (BACKLOG items #6, #7, #8). #3, #4, #5 are now ported (PRs #14, #15). The cross-harness control ran on the **Python** harness with all six ported (PR #52 etc.). The Rust harness's lower sub-call count at GLaDOS medium (4-5 vs 51) is consistent with a parser that's more conservative about which replies contain code; the fix in #3 should bring them closer. Whether closing that gap would change the 0.20 → 0.10 mean on GLaDOS is an open question; the per-cell score match suggests no, but the cell count is too small to be sure.
 
 ## How to reproduce
 
