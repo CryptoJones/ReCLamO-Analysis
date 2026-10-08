@@ -24,12 +24,16 @@ provider = "openai-compat"
 model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 max_context = 1_048_576
 # resident_kv is a *router budget*, not the model's real input cap.
-# Llama 3.3 70B (DeepInfra) caps at 131071 — too small for medium/large
-# generators (300K chars ≈ 131K tokens, 1.2M chars ≈ 525K tokens).
-# Gemini 2.0 Flash (free on OpenRouter) accepts 1M tokens, fits all three
-# sizes. 0.8M is the cross-tokenizer safety factor the peer recommended.
-# If we move back to a smaller model, drop resident_kv to ~0.7× the cap.
-resident_kv = 800_000
+# We use it to force harness-path on sizes the model would otherwise
+# absorb via plain path. At 80_000:
+#   small  (60K chars ≈ 17K tokens + 2K margin = 19K)  → plain
+#   medium (300K chars ≈ 86K + 2K = 88K)              → harness
+#   large  (1.2M chars ≈ 343K + 2K = 345K)            → harness
+# 80K is the cross-tokenizer safety factor the peer recommended
+# (0.7× of a 131K cap; here it's deliberately TIGHT so the harness
+# path fires on medium and large even on 1M-ctx models like Gemini
+# 2.5 Flash Lite).
+resident_kv = 80_000
 subcall_chars = 8_000
 temperature = 0.7
 top_p = 0.95

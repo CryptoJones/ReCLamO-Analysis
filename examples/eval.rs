@@ -186,6 +186,16 @@ impl std::fmt::Debug for EvalCfg {
 impl EvalCfg {
     fn to_model_profile(&self, provider: Arc<dyn Provider>) -> ModelProfile {
         let mut p = ModelProfile::new(self.provider.clone(), provider, self.max_context);
+        // Pull `resident_kv` from the TOML profile if one was passed; the
+        // router uses it to decide plain-vs-harness. Defaulting to
+        // `max_context` (CLI's 200K) silently disables the route-by-size
+        // check on models with larger caps, so medium and large always
+        // take the plain path even when the profile asked for harness.
+        if let Some(path) = &self.profile_path {
+            if let Ok(profile) = Profile::from_path(path) {
+                p.resident_kv = profile.resident_kv.unwrap_or(self.max_context);
+            }
+        }
         p.thinking = ThinkingMode::Adaptive;
         p
     }
