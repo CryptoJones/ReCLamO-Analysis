@@ -335,6 +335,13 @@ impl LoopConfig {
         if let Some(v) = opts.max_subcalls_per_exec {
             c.max_subcalls_per_exec = v;
         }
+        // `max_timeout` is also overridable so tests can bound the
+        // loop with millisecond budgets (instead of the 600s default)
+        // — see `harness_root_call_respects_max_timeout` and
+        // `harness_exec_respects_remaining_deadline` (#7).
+        if let Some(v) = opts.max_timeout {
+            c.max_timeout = v;
+        }
         c
     }
 }

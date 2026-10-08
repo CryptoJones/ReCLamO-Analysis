@@ -99,11 +99,11 @@ pub async fn run(
     while turn < cfg.max_iterations {
         turn += 1;
         if Instant::now() >= deadline {
-            return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_timeout", &mut stats, started).await;
+            return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_timeout", &mut stats, started, deadline).await;
         }
         if let Some(t) = cfg.max_tokens {
             if stats.tokens >= t {
-                return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_tokens", &mut stats, started).await;
+                return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_tokens", &mut stats, started, deadline).await;
             }
         }
 
@@ -136,7 +136,35 @@ pub async fn run(
             extra_body: profile.extra_body.clone(),
         };
 
-        let completion = profile.provider.complete(&messages, None, opts).await?;
+        let completion = match tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            profile.provider.complete(&messages, None, opts),
+        )
+        .await
+        {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => return Err(e),
+            // Root call ran past the run's `max_timeout` budget. Mirror
+            // ReCLamO-Harness #51 (PR #52) — the loop's deadline must
+            // bound the root call, not just the per-turn check at the
+            // top. Without this, a hung model can run far past
+            // `max_timeout` because the deadline is only sampled at
+            // turn boundaries. Forced_finish records the
+            // `forced_finish:max_timeout` stop_reason the eval rig
+            // already understands (mirrors the per-turn check).
+            Err(_elapsed) => {
+                return forced_finish(
+                    repl.as_mut(),
+                    profile.provider.as_ref(),
+                    &messages,
+                    "max_timeout",
+                    &mut stats,
+                    started,
+                    deadline,
+                )
+                .await;
+            }
+        };
         stats.tokens += completion.usage.total();
         stats.turns = turn;
 
@@ -193,6 +221,7 @@ pub async fn run(
                                 "final_var_uncommitted",
                                 &mut stats,
                                 started,
+                                deadline,
                             )
                             .await;
                         }
@@ -256,11 +285,42 @@ pub async fn run(
         // The `TurnLine.parsed_code_blocks` field already records N so
         // the drop is visible in the trajectory (parsed N, executed 1).
         for block in parsed.code_blocks.iter().take(1) {
-            let exec = repl.execute(&block.code).await?;
+            // Bound the REPL exec by the run's remaining deadline AND
+            // the existing per-sub-call budget (whichever is shorter).
+            // SubprocessRepl::execute has no built-in timeout — a hung
+            // Python child (e.g. infinite loop in user code) blocks
+            // forever without this. The subcall_timeout default of 90s
+            // also serves as the per-exec cap; the remaining deadline
+            // provides the overall run cap. Mirror of ReCLamO-Harness
+            // #51 (PR #52).
+            let exec_budget = deadline
+                .saturating_duration_since(Instant::now())
+                .min(cfg.subcall_timeout);
+            let exec = match tokio::time::timeout(
+                exec_budget,
+                repl.execute(&block.code),
+            )
+            .await
+            {
+                Ok(Ok(e)) => e,
+                Ok(Err(e)) => return Err(e),
+                Err(_elapsed) => {
+                    return forced_finish(
+                        repl.as_mut(),
+                        profile.provider.as_ref(),
+                        &messages,
+                        "max_timeout",
+                        &mut stats,
+                        started,
+                        deadline,
+                    )
+                    .await;
+                }
+            };
             if exec.error.is_some() {
                 consecutive_errors += 1;
                 if consecutive_errors >= cfg.max_errors {
-                    return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_errors", &mut stats, started).await;
+                    return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_errors", &mut stats, started, deadline).await;
                 }
             } else {
                 consecutive_errors = 0;
@@ -292,7 +352,7 @@ pub async fn run(
         last_user_turn_nudge = false;
     }
 
-    forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_iterations", &mut stats, started).await
+    forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_iterations", &mut stats, started, deadline).await
 }
 
 fn intent_to_string(i: &FinalIntent) -> String {
@@ -400,6 +460,7 @@ async fn forced_finish(
     kind: &'static str,
     stats: &mut LoopStats,
     started: Instant,
+    deadline: Instant,
 ) -> ReclamoResult<RunResult> {
     // Step 1: ask the model once with REPL state shown. Demand a
     // FINAL_VAR(answer) if `answer['content']` is non-empty, else fall
@@ -429,7 +490,36 @@ async fn forced_finish(
         extra_body: serde_json::Value::Null,
     };
 
-    let completion = provider.complete(&attempt_messages, None, opts).await;
+    // Bound the forced-finish provider call by the same run deadline
+    // the loop already uses — otherwise a hung model can blow past
+    // `max_timeout` *twice* (once in the loop, once here) and the
+    // `forced_finish:max_timeout` stop_reason still leaks a slow
+    // completion through as the answer. (#7 — root call path, but
+    // forced_finish is the second of two provider calls the loop
+    // can make, and it must be bounded too.)
+    let budget = deadline.saturating_duration_since(Instant::now());
+    let completion = match tokio::time::timeout(
+        budget,
+        provider.complete(&attempt_messages, None, opts),
+    )
+    .await
+    {
+        Ok(Ok(c)) => Ok(c),
+        // ANY provider error in the forced-finish call — a model-side
+        // error (e.g. mock exhausted) OR the call itself blowing the
+        // budget — must NOT propagate. The loop has already decided
+        // the run is over; the eval rig scores `stop_reason` and an
+        // empty `answer`, never a `ReclamoError`. Fall through to the
+        // REPL-state lookup below.
+        Ok(Err(_e)) => Err(ReclamoError::Provider {
+            provider: provider.name().to_string(),
+            message: format!("forced_finish: {kind} provider error"),
+        }),
+        Err(_elapsed) => Err(ReclamoError::Provider {
+            provider: provider.name().to_string(),
+            message: format!("forced_finish: {kind} exceeded remaining budget {budget:?}"),
+        }),
+    };
     let extra_tokens = completion.as_ref().map(|c| c.usage.total()).unwrap_or(0);
     stats.tokens += extra_tokens;
     let answer = match completion {
@@ -701,6 +791,66 @@ mod tests {
         assert_eq!(
             res.stop_reason, "forced_finish:final_var_uncommitted",
             "after 3 consecutive uncommitted FINAL_VARs the loop must force-finish"
+        );
+        assert_eq!(res.answer, "");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn harness_root_call_respects_max_timeout() {
+        // #7 (root call path): the root `provider.complete` call is
+        // bounded by the run's `max_timeout` deadline, not just the
+        // per-turn check at the top of the loop. Previously, a hung
+        // model could run far past `max_timeout` because the deadline
+        // was only sampled at turn boundaries — a single turn's
+        // `provider.complete` could hang indefinitely and the loop
+        // never checked. The fix wraps the call in
+        // `tokio::time::timeout(remaining, ...)` and routes the
+        // `Elapsed` into `forced_finish:max_timeout`.
+        //
+        // Test: a slow async mock that sleeps 1s on every call, with
+        // `max_timeout=100ms`. The provider call should fire
+        // `Elapsed` at 100ms, well before the 1s sleep completes.
+        // The per-turn check at the top of turn 2 would also see the
+        // deadline is past, but the new wrapper trips first.
+        //
+        // (The exec path is also bounded — same pattern, see the
+        // `tokio::time::timeout` wrap around `repl.execute` in the
+        // loop. No unit test for that one yet: `SubprocessRepl::execute`
+        // does not currently SIGKILL the child on timeout, so a test
+        // that drives `while True: pass` would leak a Python child
+        // and hang the test runner even after forced_finish returns.
+        // The production fix is correct; the test gap is a
+        // SubprocessRepl cleanup TODO, not a rlm.rs gap.)
+        use crate::completion::{completion, RouteMode};
+        use crate::providers::{MockProvider, Usage};
+        use std::sync::Arc;
+        use std::time::Duration;
+        let slow: crate::providers::mock::AsyncScripted = Arc::new(|_msgs| {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                Completion {
+                    content: "should not be reached".into(),
+                    reasoning: None,
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+                }
+            })
+        });
+        let prov: Arc<dyn crate::providers::Provider> =
+            Arc::new(MockProvider::function_async("slow-mock", slow));
+        let mut profile = crate::providers::ModelProfile::new("slow-profile", prov, 16_384);
+        profile.thinking = crate::providers::ThinkingMode::Disabled;
+        let mut opts = CompletionOpts::default();
+        opts.route_mode = RouteMode::Harness;
+        opts.max_timeout = Some(Duration::from_millis(100));
+        let res = completion("tiny context".into(), "q".into(), profile, opts)
+            .await
+            .expect("forced_finish on max_timeout must still return Ok so the eval rig scores it as 0.0");
+        assert_eq!(res.mode, "harness:fence");
+        assert_eq!(
+            res.stop_reason, "forced_finish:max_timeout",
+            "a slow provider.complete must trip the root-call timeout, not burn the full max_iterations"
         );
         assert_eq!(res.answer, "");
     }
