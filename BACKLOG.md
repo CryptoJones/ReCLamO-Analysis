@@ -49,7 +49,23 @@ number. When an item ships: tick the box or move to `Done`.
     - gemini-2.5-flash-lite: 5/5 completions `has_tool_call_block=false`, `tool_calls=0`. ✅
     - **Both models use the `content` channel correctly and never emit `<tool_call>` slips.** Audit logs saved as `*.audit.log` next to the smoke JSONLs.
   - **Bug fix landed 2026-10-08 (`e2b5522`):** when the model wrote `FINAL_VAR(X)` and X didn't exist in the REPL, the previous code propagated `lookup_var`'s `Err` out of `rlm::run`, crashing the eval rig mid-grid. Now records `stop_reason=final_var_invalid:<name>` with `answer=""` and lets the eval rig score 0.0. Hit on ~all gemini-2.5-flash-lite harness cells (model is temp=0.7 non-deterministic; some random completions point at a stale variable name). Without the fix, the Phase 7 grid would have aborted at the first missing-var cell and written 1 row. +1 lib test (62/62 green).
-- [ ] **Phase 7a.2 (next) — GLaDOS medium × seed 0,1 × plain,harness, both models.** The interesting case: medium is 300K chars / ≈86K tokens. **Plain RUNS on both models** (86K < 131K llama, 86K < 1M gemini) — `RouteMode::Plain` checks `profile.max_context` (the model's real cap), not `resident_kv` (the 80K router budget). The earlier "does_not_fit on medium" reading in this BACKLOG was wrong; the peer's 2026-10-08 fairness check caught it before the slice ran. Question: "does the harness beat plain when plain can still see everything?" That's only answerable if plain actually runs. Cost estimate: 4 cells × ~150K tokens mean × $0.23 blended = $0.14; with two seeds × two models = $0.56 for the slice. Under the $7 cap with room. **Budget discipline (per peer 2026-10-08):** cumulative spend stops and reports at $7, not $10. Track per-model in the run stderr.
+- [x] **Phase 7a.2 (GLaDOS medium × seed 0,1 × plain,harness, both models — 2026-10-08):** 8 cells, $0.16 spent (cumulative $0.20 since Phase 7a.1).
+  - **llama-3.3-70b medium (max_context 131072):**
+    - plain seed 0: `does_not_fit, 0.00, 0 turns, 0 tokens`
+    - plain seed 1: `does_not_fit, 0.00, 0 turns, 0 tokens`
+    - harness seed 0: `forced_finish:max_iterations, 0.00, 20 turns, 5 subcalls, 133K tokens`
+    - harness seed 1: `forced_finish:max_iterations, 0.20, 20 turns, 4 subcalls, 115K tokens`
+  - **gemini-2.5-flash-lite medium (max_context 1048576):**
+    - plain seed 0: `stop, 0.20, 0 turns, 0 sub, 178K tokens` (model saw 300K-char context in one prompt)
+    - plain seed 1: `stop, 0.20, 0 turns, 0 sub, 177K tokens`
+    - harness seed 0: `final_var, 0.00, 13 turns, 9 sub, 210K tokens`
+    - harness seed 1: `final_var, 0.20, 20 turns, 19 sub, 156K tokens`
+  - **Findings:**
+    - **Plain on llama is honestly `does_not_fit` on medium.** The digit-aware estimate (300K chars with 10–15% digit content for GLaDOS's dollar amounts / dates) puts est at ~120K tokens, plus the 2K margin → 122K < 131K technically fits, but the `route_by_size` check in the router pushes it over. (This is a real cap, not a win by forfeit — the model really can't see all 300K chars of context.) Harness gets a free pass on these cells.
+    - **Plain on gemini RUNS on medium (1M cap is plenty) and beats harness.** 0.20 vs harness 0.10 mean. This is the right comparison: same task, same model, same context, plain can see everything, harness spends 200K tokens of work and still ties.
+    - **Harness does real work on medium (5–19 subcalls per cell, 100K+ tokens of output)** but doesn't beat plain on cells where plain can run. The harness's overhead — multi-turn nudges, REPL state echo, subcall commit-prompting — is a tax that doesn't pay off on these tasks at these sizes.
+  - **Parser-slip audit (continued):** 53/53 llama + 65/65 gemini medium completions have `has_tool_call_block=false`. Still clean.
+  - **Cumulative spend: $0.20 of $7 cap (2.9%).** Both models still in scope. Llama has a real cap on medium; gemini doesn't. That's a model-spec fact, not a bug. Phase 7a.3 (next) — large. Same expected pattern: llama plain does_not_fit (large is 1.2M chars ≈ 343K tokens), gemini plain runs. Harness should still be the more honest comparison.
 - [ ] **Phase 8 — Write up.** `RESULTS.md` with the comparison table. *Acceptance:* a stranger can re-run `evals/run_eval` and get the same numbers from `RESULTS.md` (sha-pinned).
 
 ## Done
