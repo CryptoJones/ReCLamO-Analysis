@@ -1,0 +1,16 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running `target/debug/examples/eval --provider openai-compat --model google/gemini-2.5-flash-lite --profile profiles/openrouter.toml --max-context 1048576 --tasks GLaDOS --sizes small --seeds 0,1 --mode both --out /tmp/audit-gemini-final.jsonl`
+config: EvalCfg { provider: "openai-compat", model: "google/gemini-2.5-flash-lite", tasks: ["GLaDOS"], sizes: ["small"], seeds: [0, 1], modes: [Plain, Harness], out: "/tmp/audit-gemini-final.jsonl" }
+modes: [Plain, Harness]
+[2m2026-10-08T10:21:01.776619Z[0m [34mDEBUG[0m [2mreclamo_anl::providers::openai_compat[0m[2m:[0m completion [3mmodel[0m[2m=[0mgoogle/gemini-2.5-flash-lite [3mfinish[0m[2m=[0mlength [3mtool_calls[0m[2m=[0m0 [3mcontent_bytes[0m[2m=[0m11438 [3mhas_tool_call_block[0m[2m=[0mfalse
+[2m2026-10-08T10:21:15.271787Z[0m [34mDEBUG[0m [2mreclamo_anl::providers::openai_compat[0m[2m:[0m completion [3mmodel[0m[2m=[0mgoogle/gemini-2.5-flash-lite [3mfinish[0m[2m=[0mlength [3mtool_calls[0m[2m=[0m0 [3mcontent_bytes[0m[2m=[0m16742 [3mhas_tool_call_block[0m[2m=[0mfalse
+GLaDOS small seed=0 | Plain, Harness
+[2m2026-10-08T10:21:21.440295Z[0m [34mDEBUG[0m [2mreclamo_anl::providers::openai_compat[0m[2m:[0m completion [3mmodel[0m[2m=[0mgoogle/gemini-2.5-flash-lite [3mfinish[0m[2m=[0mstop [3mtool_calls[0m[2m=[0m0 [3mcontent_bytes[0m[2m=[0m5776 [3mhas_tool_call_block[0m[2m=[0mfalse
+[2m2026-10-08T10:21:31.383895Z[0m [34mDEBUG[0m [2mreclamo_anl::providers::openai_compat[0m[2m:[0m completion [3mmodel[0m[2m=[0mgoogle/gemini-2.5-flash-lite [3mfinish[0m[2m=[0merror [3mtool_calls[0m[2m=[0m0 [3mcontent_bytes[0m[2m=[0m10142 [3mhas_tool_call_block[0m[2m=[0mfalse
+[2m2026-10-08T10:22:26.578750Z[0m [34mDEBUG[0m [2mreclamo_anl::providers::openai_compat[0m[2m:[0m completion [3mmodel[0m[2m=[0mgoogle/gemini-2.5-flash-lite [3mfinish[0m[2m=[0mstop [3mtool_calls[0m[2m=[0m0 [3mcontent_bytes[0m[2m=[0m10079 [3mhas_tool_call_block[0m[2m=[0mfalse
+GLaDOS small seed=1 | Plain, Harness
+
+--- 4 rows ---
+mean score: 0.150
+  Harness: 2 rows, mean 0.000
+  Plain: 2 rows, mean 0.300
