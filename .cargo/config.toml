@@ -1,0 +1,10 @@
+# Build target lives off the internal disk. The internal APFS volume
+# runs hot (35 Gi free as of 2026-10-08; a 1.9 Gi target/ on a single
+# Rust crate is a meaningful chunk). /Volumes/Vault has 715 Gi free
+# and is APFS-local (no network round-trips). The dir is pinned by
+# name so an existing `target/` can be `mv`'d into place at the same
+# absolute path and incremental builds keep working.
+#
+# Re-evaluate when the internal disk pressure returns.
+[build]
+target-dir = "/Volumes/Vault/reclamo-analysis-target"
