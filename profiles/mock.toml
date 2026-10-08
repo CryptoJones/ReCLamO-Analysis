@@ -1,0 +1,26 @@
+# Mock profile — no network. Used for unit tests, CI, and the Phase-2
+# CLI smoke that doesn't require a real provider.
+#
+# Run:
+#   cargo run -- run --profile profiles/mock.toml --provider mock \
+#     --context examples/needle.txt -q "Find the needle."
+
+name = "mock"
+provider = "mock"
+model = "mock-m"
+max_context = 16_384
+subcall_chars = 12_000
+temperature = 0.0
+top_p = 1.0
+
+[loop_config]
+max_iterations = 4
+max_timeout_secs = 60
+subcall_timeout_secs = 30
+max_errors = 3
+max_subcalls_per_run = 16
+max_subcalls_per_exec = 8
+root_max_output_tokens = 1024
+subcall_max_output_tokens = 512
+route_by_size = true
+plain_query_margin = 2_000

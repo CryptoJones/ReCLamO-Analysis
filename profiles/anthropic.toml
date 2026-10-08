@@ -1,0 +1,34 @@
+# Anthropic Sonnet/Opus family — Messages API direct.
+#
+# Run:
+#   ANTHROPIC_API_KEY=$(pass anthropic/prod) \
+#     cargo run -- run --profile profiles/anthropic.toml \
+#       --context examples/needle.txt -q "Find the needle."
+#
+# The provider reads the key from the env named here. Use `api_key_cmd`
+# if you'd rather pull from `pass`.
+
+name = "anthropic-sonnet"
+provider = "anthropic"
+model = "claude-sonnet-4-5"
+max_context = 200_000
+resident_kv = 200_000
+subcall_chars = 12_000
+temperature = 0.7
+top_p = 0.95
+
+# Read the key from $ANTHROPIC_API_KEY. Override with api_key_cmd to
+# pull from `pass anthropic/prod` instead.
+api_key_env = "ANTHROPIC_API_KEY"
+
+[loop_config]
+max_iterations = 20
+max_timeout_secs = 600
+subcall_timeout_secs = 90
+max_errors = 3
+max_subcalls_per_run = 64
+max_subcalls_per_exec = 24
+root_max_output_tokens = 4096
+subcall_max_output_tokens = 2048
+route_by_size = true
+plain_query_margin = 2_000

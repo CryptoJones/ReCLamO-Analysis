@@ -10,7 +10,7 @@
 use super::base::{CapabilitySet, CompleteOpts, Completion, Message, Provider, Role};
 use crate::error::{ReclamoError, ReclamoResult};
 use async_trait::async_trait;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Boxed scripted completion.
 pub type Scripted = std::sync::Arc<dyn Fn(&[Message]) -> Completion + Send + Sync>;
@@ -44,6 +44,15 @@ impl MockProvider {
             inner: Mutex::new(Script::Function(f)),
             caps: CapabilitySet::openai_compat(),
         }
+    }
+
+    /// Build a mock that returns the same completion forever (e.g. a
+    /// canned `FINAL_VAR(answer)` for loop smoke tests).
+    pub fn looped(model: impl Into<String>, completion: Completion) -> Self {
+        Self::function(model, {
+            let c = completion.clone();
+            Arc::new(move |_| c.clone())
+        })
     }
 
     /// Override the capability set the mock claims to support.

@@ -34,6 +34,9 @@ enum Cmd {
         /// Profile TOML file (or `--provider mock` for tests).
         #[arg(long)]
         profile: PathBuf,
+        /// Override provider from the profile (e.g. `mock` to skip network).
+        #[arg(long)]
+        provider: Option<String>,
         /// Context (path to file or `-` for stdin).
         #[arg(long)]
         context: String,
@@ -67,13 +70,13 @@ pub fn main() -> anyhow::Result<()> {
             Cmd::Ping { profile, provider } => {
                 cmd_ping(profile, provider).await?;
             }
-            Cmd::Run { profile, context, query, log_dir, max_iterations } => {
+            Cmd::Run { profile, context, query, log_dir, max_iterations, provider } => {
                 let opts = CompletionOpts {
                     max_iterations,
                     log_dir,
                     ..Default::default()
                 };
-                cmd_run(profile, context, query, opts).await?;
+                cmd_run(profile, provider, context, query, opts).await?;
             }
         }
         Ok::<(), anyhow::Error>(())
@@ -106,13 +109,14 @@ async fn cmd_ping(profile_path: PathBuf, provider_override: Option<String>) -> a
 
 async fn cmd_run(
     profile_path: PathBuf,
+    provider_override: Option<String>,
     context: String,
     query: String,
     opts: CompletionOpts,
 ) -> anyhow::Result<()> {
     let profile = Profile::from_path(&profile_path)
         .map_err(|e| anyhow::anyhow!("load profile: {e}"))?;
-    let provider = build_provider(&profile, None).await?;
+    let provider = build_provider(&profile, provider_override.as_deref()).await?;
     let model_profile = profile.model_profile(provider);
     let context_text = read_context(&context).await?;
     let result = completion(context_text, query, model_profile, opts).await?;

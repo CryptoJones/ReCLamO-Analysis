@@ -123,14 +123,27 @@ pub trait ReplClient: Send {
     async fn shutdown(&mut self) -> ReclamoResult<()>;
 }
 
-/// Phase 1 default: in-memory REPL, no Python subprocess. Phase 2 adds
-/// `SubprocessRepl` and switches `default_client` once worker.py is stable.
+/// Phase 1 default: in-memory REPL, no Python subprocess. Phase 2 callers
+/// should use [`spawn_subprocess`] instead so the Python worker is live.
 pub fn default_client(_context: &str, _subcall_timeout: std::time::Duration) -> ReclamoResult<Box<dyn ReplClient>> {
     Ok(Box::new(InMemoryRepl::new()))
 }
 
+/// Phase 2: spawn a real Python subprocess worker wired to the supplied
+/// sub-call handler (returns a `Box<dyn ReplClient>` for the loop).
+pub async fn spawn_subprocess(
+    context: &str,
+    subcall: subprocess_repl::SubcallFn,
+) -> ReclamoResult<Box<dyn ReplClient>> {
+    let r = subprocess_repl::SubprocessRepl::spawn(context, subcall).await?;
+    Ok(Box::new(r))
+}
+
 // Re-export for callers that want to build one explicitly (tests).
 pub use in_memory_repl::InMemoryRepl;
+
+// Subprocess REPL types.
+pub use subprocess_repl::{SubcallFn, SubcallFuture, SubprocessRepl};
 
 mod in_memory_repl;
 pub mod subprocess_repl;

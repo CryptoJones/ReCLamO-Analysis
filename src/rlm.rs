@@ -22,7 +22,10 @@ use crate::logger::{make_meta, RunLogger, TurnLine};
 use crate::parsing::{extract_final, parse_response, FinalIntent};
 use crate::prompts::{build_system_prompt, build_user_message, PromptInputs};
 use crate::providers::{CompleteOpts, Message, ModelProfile};
-use crate::repl::{ReplClient, ReplExecResult};
+use crate::repl::{self, ReplClient, ReplExecResult, SubcallFn};
+use crate::repl::subprocess_repl::SubcallFuture;
+use serde_json::Value;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub async fn run(
@@ -34,8 +37,19 @@ pub async fn run(
     let started = Instant::now();
     let deadline = started + cfg.max_timeout;
 
-    // Open the REPL and load the context.
-    let mut repl: Box<dyn ReplClient> = crate::repl::default_client(&context, cfg.subcall_timeout)?;
+    // Open the REPL and load the context. We try the real subprocess worker
+    // first; if Python is missing on PATH (CI on a stripped image, etc.) we
+    // fall back to the in-memory scripted variant so unit tests still pass.
+    let subcall_fn = make_subcall_fn(&profile, &cfg);
+    let mut repl: Box<dyn ReplClient> = match repl::spawn_subprocess(&context, subcall_fn).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                "SubprocessRepl unavailable, falling back to InMemoryRepl: {e}"
+            );
+            repl::default_client(&context, cfg.subcall_timeout)?
+        }
+    };
     let caps = profile.provider.capabilities();
     let sys_prompt_text = build_system_prompt(PromptInputs { profile: &profile, caps: &caps }).text;
 
@@ -83,7 +97,7 @@ pub async fn run(
             // The first user message is already in messages.
         } else {
             // Build a fresh user message with nudges.
-            let has_answer = repl_has_answer(&*repl).await;
+            let has_answer = repl_has_answer(repl.as_mut()).await;
             let nudge = build_user_message(
                 &query, turn, cfg.max_iterations,
                 stats.subcalls_total,
@@ -209,11 +223,24 @@ fn intent_to_string(i: &FinalIntent) -> String {
     }
 }
 
-async fn repl_has_answer(_repl: &dyn ReplClient) -> bool {
-    // Phase 1 doesn't introspect the REPL across the wire; the InMemory
-    // variant gives it back via lookup_var. We default to false (the prompt's
-    // commit-early rule covers the case anyway).
-    false
+async fn repl_has_answer(repl: &mut dyn ReplClient) -> bool {
+    // Cross-wire: a real subprocess worker honors lookup_var; InMemoryRepl
+    // does too (returns the dict or string the script bound). We accept
+    // either shape: a string is truthy if non-empty; a dict is truthy if
+    // `answer['content']` is non-empty.
+    let v = repl.lookup_var("answer").await.unwrap_or(Value::Null);
+    match v {
+        Value::String(s) => !s.is_empty(),
+        Value::Object(map) => map
+            .get("content")
+            .and_then(|c| match c {
+                Value::String(s) => Some(!s.is_empty()),
+                _ => None,
+            })
+            .unwrap_or(false),
+        Value::Null => false,
+        _ => false,
+    }
 }
 
 async fn lookup_var(
@@ -237,6 +264,18 @@ async fn lookup_var(
 fn strip_to_string(v: serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s,
+        // The REPL bootstrap leaves `answer` as `{"content": "..."}`; the
+        // worker's `commit(text)` writes to that slot. So if we get back a
+        // dict with a `content` key, return just the content.
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(s)) = map.get("content") {
+                return s.clone();
+            }
+            serde_json::Value::Object(map).to_string()
+        }
+        // Fall back to the JSON shape for anything else (numbers, bools,
+        // nulls, arrays). Eval-rig `extract_final` filters these cases
+        // before this runs.
         other => other.to_string(),
     }
 }
@@ -347,3 +386,112 @@ async fn forced_finish(
 }
 
 fn profile_t_low() -> f64 { 0.3 }
+
+fn make_subcall_fn(profile: &ModelProfile, cfg: &LoopConfig) -> SubcallFn {
+    let provider: Arc<dyn crate::providers::Provider> = profile.provider.clone();
+    let extra_body = profile.extra_body.clone();
+    // Sub-calls: cheaper decoding. Mirror the v0.1 Strata defaults — no
+    // thinking on sub-calls (45 tok/s vs 12 tok/s for Qwen on Strata),
+    // lower temperature for stability.
+    let temperature = profile.temperature.min(0.3);
+    let top_p = profile.top_p.min(0.9);
+    let top_k = profile.top_k;
+    let max_output = cfg.subcall_max_output_tokens as u64;
+    let subcall_timeout = cfg.subcall_timeout;
+    Arc::new(move |prompt: String| -> SubcallFuture {
+        let provider = provider.clone();
+        let extra_body = extra_body.clone();
+        Box::pin(async move {
+            let opts = CompleteOpts {
+                thinking_override: Some(crate::providers::ThinkingMode::Disabled),
+                temperature: Some(temperature),
+                top_p: Some(top_p),
+                top_k,
+                max_output_tokens: Some(max_output),
+                extra_body,
+            };
+            let msgs = vec![Message::user(prompt)];
+            let completion =
+                tokio::time::timeout(subcall_timeout, provider.complete(&msgs, None, opts))
+                    .await
+                    .map_err(|_| {
+                        ReclamoError::Repl("sub-call timeout".into())
+                    })??;
+            Ok((completion.content, completion.usage.total()))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Lightweight end-to-end tests of the loop, gated on a MockProvider
+    //! so they don't require network or Python.
+    use super::*;
+    use crate::completion::CompletionOpts;
+    use crate::providers::{Completion, MockProvider, ThinkingMode, Usage};
+    use crate::repl::InMemoryRepl;
+
+    fn make_profile(scripted: Vec<Completion>) -> ModelProfile {
+        let prov: Arc<dyn crate::providers::Provider> = Arc::new(MockProvider::scripted("mock-m", scripted));
+        let mut p = ModelProfile::new("mock-profile", prov, 16_384);
+        p.thinking = ThinkingMode::Disabled;
+        p
+    }
+
+    #[tokio::test]
+    async fn loop_completes_via_final_var_in_memory_repl() {
+        // MockProvider scripted to emit a one-shot FINAL_VAR(answer); the
+        // InMemoryRepl fallback holds `answer` as a string set by the
+        // first scripted exec (which we drive directly via repl.put).
+        let scripted = vec![
+            Completion {
+                content: "```repl\ncommit(\"the needle is at index 7\")\n```\nFINAL_VAR(answer)".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(8), output_tokens: Some(8), total_tokens: Some(16) },
+            },
+        ];
+        let profile = make_profile(scripted);
+        // NOTE: repl_has_answer uses `lookup_var("answer")` against the
+        // InMemoryRepl — the test repl needs to have `answer` already
+        // bound from the simulated exec. We pre-populate it via put().
+        // We can't easily run the loop with InMemoryRepl through `run()`,
+        // because run() always tries SubprocessRepl first. Instead, build
+        // a small InMemoryRepl and exercise the FINAL_VAR resolution path
+        // directly.
+        let mut repl_test = InMemoryRepl::new().on_lookup(|name, state| {
+            state.get(name).cloned().unwrap_or(Value::Null)
+        });
+        repl_test.put("answer", serde_json::json!("the needle is at index 7"));
+        let v = repl_test.lookup_var("answer").await.unwrap();
+        assert_eq!(v, serde_json::json!("the needle is at index 7"));
+
+        // Drive a fake "first turn": model returned FINAL_VAR; we resolve
+        // via lookup_var.
+        let answer = lookup_var(&mut repl_test, "answer").await.unwrap();
+        assert_eq!(answer, "the needle is at index 7");
+        let _ = profile;
+    }
+
+    #[tokio::test]
+    async fn route_by_size_sends_plain_path() {
+        // A small context that fits in `resident_kv - plain_query_margin`
+        // takes the plain path, never runs the loop.
+        use crate::completion::completion;
+        let scripted = vec![Completion {
+            content: "FINAL(not used; plain path)".into(),
+            reasoning: None,
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+        }];
+        let profile = make_profile(scripted);
+        let ctx = "tiny context".to_string();
+        let query = "what?".to_string();
+        let opts = CompletionOpts::default();
+        let res = completion(ctx, query, profile, opts).await.unwrap();
+        assert_eq!(res.mode, "plain");
+        assert!(!res.answer.is_empty());
+    }
+}

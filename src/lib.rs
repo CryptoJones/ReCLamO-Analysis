@@ -37,7 +37,7 @@ pub use config::{LoopConfig, Profile};
 pub use error::{ReclamoError, ReclamoResult};
 pub use providers::{
     AnthropicProvider, CapabilitySet, Completion, Message, MockProvider, ModelProfile, OpenAICompatProvider,
-    Provider, Role, Usage,
+    Provider, ReasoningFormat, Role, ThinkingMode, Usage,
 };
 pub use repl::{ReplClient, ReplExecResult};
 

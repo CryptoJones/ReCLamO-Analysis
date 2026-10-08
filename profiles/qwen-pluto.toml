@@ -1,0 +1,39 @@
+# Qwen3.8 running on pluto's Strata (Flash-Next) via the OpenAI-compat
+# endpoint. Mirrors the v0.1 setup so the harness can be regression-
+# checked against the original.
+#
+# Run:
+#   STRATA_URL=http://pluto.strata.local:8083 \
+#   STRATA_KEY=$(pass strata/key) \
+#     cargo run -- run --profile profiles/qwen-pluto.toml \
+#       --context examples/needle.txt \
+#       -q "Find the needle."
+
+name = "qwen-pluto"
+provider = "openai-compat"
+model = "Qwen3-8B-Flash-Next"
+max_context = 262_144
+resident_kv = 32_000       # v0.1 kept only 32K resident
+subcall_chars = 8_000
+temperature = 0.7
+top_p = 0.95
+presence_penalty = 0.1    # v0.1 anti-repetition guard
+
+# Base URL — override per host.
+base_url = "http://pluto.strata.local:8083/v1"
+api_key_env = "STRATA_KEY"
+
+# Vendor passthrough — Strata's chat_template_kwargs.
+extra_body = { chat_template_kwargs = { enable_thinking = false } }
+
+[loop_config]
+max_iterations = 20
+max_timeout_secs = 600
+subcall_timeout_secs = 90
+max_errors = 3
+max_subcalls_per_run = 64
+max_subcalls_per_exec = 24
+root_max_output_tokens = 4096
+subcall_max_output_tokens = 2048
+route_by_size = true
+plain_query_margin = 2_000

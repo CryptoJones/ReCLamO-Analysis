@@ -173,7 +173,7 @@ pub fn build_user_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::{CapabilitySet, MockProvider, ReasoningFormat, Role, ThinkingMode};
+    use crate::providers::{CapabilitySet, MockProvider};
     use std::sync::Arc;
 
     fn profile(max_context: u64, subcall_chars: u32) -> ModelProfile {

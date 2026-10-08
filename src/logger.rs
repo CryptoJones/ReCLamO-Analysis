@@ -65,6 +65,7 @@ pub struct SubcallLine {
 pub struct RunLogger {
     inner: Mutex<Option<BufWriter<std::fs::File>>>,
     run_id: String,
+    #[allow(dead_code)]
     started_at: String,
     path: PathBuf,
 }
