@@ -89,6 +89,13 @@ pub async fn run(
     let mut last_user_turn_nudge = false;
 
     let mut turn: u32 = 0;
+    // Number of consecutive turns where the model emitted
+    // `FINAL_VAR(<name>)` but the name wasn't in the REPL. Caps at 3
+    // (then forced_finish) so a model that keeps hallucinating the
+    // same variable doesn't loop forever. Resets on any successful
+    // commit, successful final, or successful final_var.
+    #[allow(unused_assignments)]
+    let mut consecutive_uncommitted_finalvar: u32 = 0;
     while turn < cfg.max_iterations {
         turn += 1;
         if Instant::now() >= deadline {
@@ -162,18 +169,47 @@ pub async fn run(
                 FinalIntent::FinalVar(name) => match lookup_var(repl.as_mut(), name).await {
                     Ok(v) => (v, "final_var".to_string()),
                     // The model wrote FINAL_VAR(X) but X doesn't exist in
-                    // the REPL. This is a model mistake, not a harness
-                    // crash — record the bad stop and let the eval rig
-                    // score it as 0.0 instead of terminating the run.
-                    // (The previous `?` propagated the lookup error out
-                    // of `rlm::run` entirely, which made a non-trivial
-                    // fraction of harness cells on gemini-2.5-flash-lite
-                    // crash the eval rig mid-grid; the per-row JSONL was
-                    // truncated to whichever cell happened to land on a
-                    // missing variable first. Seen 2026-10-08.)
-                    Err(_) => (String::new(), format!("final_var_invalid:{}", name)),
+                    // the REPL. Phase 7b Cerebex (2026-10-08) showed this
+                    // is gemini-2.5-flash-lite's dominant failure mode on
+                    // the harness path: 5/6 cells ended with
+                    // `final_var_invalid:<hallucinated_name>` because the
+                    // model never committed the variable it then pointed
+                    // at. Treat it as a corrective loop signal rather than
+                    // a final stop — push a breadcrumb that names the
+                    // missing variable and the standard recovery pattern
+                    // (`<name> = <value>` then `FINAL_VAR(<name>)`), and
+                    // continue. Cap the uncommitted streak at 3 so a model
+                    // that keeps hallucinating the same name doesn't loop
+                    // forever; after the cap, forced_finish with
+                    // `forced_finish:final_var_uncommitted` (mirrors the
+                    // `max_iterations` cap pattern).
+                    Err(_) => {
+                        consecutive_uncommitted_finalvar += 1;
+                        if consecutive_uncommitted_finalvar >= 3 {
+                            return forced_finish(
+                                repl.as_mut(),
+                                profile.provider.as_ref(),
+                                &messages,
+                                "final_var_uncommitted",
+                                &mut stats,
+                                started,
+                            )
+                            .await;
+                        }
+                        let fix = format!(
+                            "FINAL_VAR({name}) pointed at a variable that doesn't exist in the REPL. \
+                             Did you forget to commit it? Either:\n\
+                             - `<name> = <extracted value>` (or `commit(\"<extracted value>\")`) then `FINAL_VAR({name})`, or\n\
+                             - `answer = <value>` followed by `FINAL_VAR(answer)`.\n\
+                             Reply with one ```repl block (or ```python) committing the variable, then re-emit the FINAL_VAR."
+                        );
+                        messages.push(Message::user(fix));
+                        continue;
+                    }
                 },
             };
+            // (Successful final: counter goes out of scope here, no
+            // need to reset; the function returns.)
             return Ok(RunResult {
                 answer,
                 mode: "harness:fence".into(),
@@ -228,6 +264,11 @@ pub async fn run(
                 }
             } else {
                 consecutive_errors = 0;
+                // A successful commit clears the uncommitted-final_var
+                // streak: the model did exactly what we asked (e.g.
+                // `answer = 42`) and the next FINAL_VAR(answer) is no
+                // longer a hallucination.
+                consecutive_uncommitted_finalvar = 0;
             }
             stats.regex_futility = count_fruitless_regex(stats.regex_futility, &exec);
             if exec.tokens > 0 {
@@ -559,18 +600,51 @@ mod tests {
         // The model writes `FINAL_VAR(missing)` and the REPL has no such
         // variable. The loop must NOT propagate the lookup error out of
         // `completion()` — that previously crashed the eval rig mid-grid
-        // on gemini-2.5-flash-lite (and likely any non-deterministic
-        // model on tasks that don't bind a final-var). The new contract:
-        // `stop_reason` is `final_var_invalid:<name>`, `answer` is empty,
-        // and the call returns Ok so the eval rig scores it as 0.0.
+        // on gemini-2.5-flash-lite (Phase 7b Cerebex, 2026-10-08). The
+        // new contract: treat the missing var as a corrective loop
+        // signal, not a final stop. Push a breadcrumb that names the
+        // missing variable and the standard recovery pattern, then
+        // continue. The next scripted turn recovers by committing a
+        // value to `answer` and re-emitting `FINAL_VAR(answer)`, so the
+        // test asserts the full recovery path: mode=harness:fence,
+        // stop=final_var, answer="42", turns>=2. (A separate test covers
+        // the 3-strike cap.)
         use crate::completion::{completion, RouteMode};
-        let scripted = vec![Completion {
-            content: "```repl\n# this commit is irrelevant\n```\nFINAL_VAR(missing_var)".into(),
-            reasoning: None,
-            tool_calls: vec![],
-            stop_reason: "stop".into(),
-            usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
-        }];
+        let scripted = vec![
+            // Turn 1: hallucinate a variable that doesn't exist. Note
+            // that any code block before the FINAL_VAR is skipped —
+            // the loop's FINAL branch runs first, so the comment
+            // never executes. That's fine: the breadcrumb push is
+            // the only thing this turn needs to do.
+            Completion {
+                content: "```repl\n# oops, never bound missing_var\n```\nFINAL_VAR(missing_var)".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+            // Turn 2: take the breadcrumb, run a real commit. No FINAL
+            // this turn — we need the code to execute and bind
+            // `answer['content']` before the next turn looks it up.
+            // (FINAL_VAR resolution runs *before* code execution, so
+            // emitting `commit(...)` + `FINAL_VAR(answer)` on the same
+            // turn would still see the bootstrap empty string.)
+            Completion {
+                content: "```repl\ncommit(\"42\")\n```".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+            // Turn 3: now `answer` is bound, emit just the FINAL.
+            Completion {
+                content: "FINAL_VAR(answer)".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+        ];
         let profile = make_profile(scripted);
         let mut opts = CompletionOpts::default();
         opts.route_mode = RouteMode::Harness;
@@ -578,7 +652,56 @@ mod tests {
             .await
             .expect("run() must not propagate lookup_var Err for a missing variable");
         assert_eq!(res.mode, "harness:fence");
-        assert_eq!(res.stop_reason, "final_var_invalid:missing_var");
+        assert_eq!(res.stop_reason, "final_var", "after the breadcrumb the model should recover and bind `answer`");
+        assert_eq!(res.answer, "42");
+        assert!(res.turns >= 2, "the loop must take at least 2 turns to recover");
+    }
+
+    #[tokio::test]
+    async fn harness_final_var_uncommitted_forced_finish_after_three() {
+        // Cap test: if the model keeps emitting `FINAL_VAR(missing)`
+        // three times in a row, the loop must NOT loop forever; it
+        // routes through `forced_finish` with kind
+        // `final_var_uncommitted` (mirrors the `max_iterations` cap
+        // pattern in `forced_finish`). Without the cap, this is
+        // gemini-2.5-flash-lite's observed failure mode on the harness
+        // path (Phase 7b Cerebex, 2026-10-08): 5/6 cells burned the
+        // full max_iterations budget emitting hallucinated names.
+        use crate::completion::{completion, RouteMode};
+        let scripted = vec![
+            Completion {
+                content: "```repl\n# never bound\n```\nFINAL_VAR(missing_var)".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+            Completion {
+                content: "```repl\n# still missing\n```\nFINAL_VAR(missing_var)".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+            Completion {
+                content: "```repl\n# still hallucinating\n```\nFINAL_VAR(missing_var)".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+        ];
+        let profile = make_profile(scripted);
+        let mut opts = CompletionOpts::default();
+        opts.route_mode = RouteMode::Harness;
+        let res = completion("tiny context".into(), "q".into(), profile, opts)
+            .await
+            .expect("forced_finish must still return Ok so the eval rig scores it as 0.0");
+        assert_eq!(res.mode, "harness:fence");
+        assert_eq!(
+            res.stop_reason, "forced_finish:final_var_uncommitted",
+            "after 3 consecutive uncommitted FINAL_VARs the loop must force-finish"
+        );
         assert_eq!(res.answer, "");
     }
 
