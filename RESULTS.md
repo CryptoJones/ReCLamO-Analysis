@@ -1,8 +1,8 @@
 # RESULTS — Phase 7a cross-model slice (GLaDOS, llama-3.3-70b + gemini-2.5-flash-lite)
 
-> **Status:** Phase 7a.1 + 7a.2 + cross-harness control done. Phase 7a.3 (large) not yet run.
+> **Status:** Phase 7a.1 + 7a.2 + 7a.3 + cross-harness control done.
 > **Date:** 2026-10-08.
-> **Eval rig:** `examples/eval.rs` at commits `e260904` (7a.1) and `1bbd7e5` (7a.2). Cross-harness control: `ReCLamO-Harness` Python at `022baad`.
+> **Eval rig:** `examples/eval.rs` at commits `e260904` (7a.1), `1bbd7e5` (7a.2), `1bbd7e5` (7a.3, no code changes since 7a.2). Cross-harness control: `ReCLamO-Harness` Python at `022baad`.
 > **Freeze manifest:** `evals/freeze_manifest.json` `version: round-3`, 8 generator SHAs pinned.
 
 ## TL;DR
@@ -12,7 +12,8 @@ For the **GLaDOS** task on **llama-3.3-70b** and **gemini-2.5-flash-lite**, the 
 | Cell | Rust harness mean | Python harness mean | Plain mean |
 |---|---|---|---|
 | GLaDOS small (both models) | 0.05 | 0.10 | 0.20 |
-| GLaDOS medium (both models) | 0.10 | 0.10 | 0.10 (Llama does_not_fit) |
+| GLaDOS medium (both models) | 0.10 | 0.10 | 0.20 (Llama does_not_fit; gemini) |
+| GLaDOS large (both models) | 0.05 | (not run) | 0.10 (Llama does_not_fit; gemini) |
 
 Caveat: this is one task and two seeds. Generalizing to "harness doesn't help" needs more tasks (Cerebex, MasterControl, etc.) and at least one non-Llama/non-Gemini model.
 
@@ -70,6 +71,34 @@ Mixed: Llama plain `does_not_fit`, gemini plain runs. 8 cells, $0.16.
 
 The gemini harness cells are the most informative at this size: the model did 9-19 sub-calls across 13-20 turns and arrived at the wrong answer (0.00) more often than not. When it scored 0.20 on seed 1, the final answer was pulled from sub-call data, not from the model's own chain.
 
+## Phase 7a.3 — GLaDOS large (1,200,535 chars, ≈343K tokens)
+
+Three of four cells score 0.00; only gemini plain scores. The 1.2M-char context finally breaks through what sub-calls can paper over. 8 cells, ~$0.082.
+
+| Model | Mode | Seed 0 | Seed 1 | Mean | Stop reason(s) | Tokens (s0/s1) | Subcalls (s0/s1) |
+|---|---|---|---|---|---|---|---|
+| llama-3.3-70b | plain | 0.00 (does_not_fit) | 0.00 (does_not_fit) | **0.00** | `does_not_fit` / `does_not_fit` | 0 / 0 | 0 / 0 |
+| llama-3.3-70b | harness | 0.00 | 0.00 | **0.00** | `final_var` / `final_var` | 37,044 / 40,402 | 4 / 3 |
+| gemini-2.5-flash-lite | plain | 0.20 | 0.20 | **0.20** | `stop` / `stop` | 737,041 / 738,621 | 0 / 0 |
+| gemini-2.5-flash-lite | harness | 0.00 | 0.20 | **0.10** | `final_var` / `final_var` | 6,948 / 31,936 | 0 / 2 |
+
+**Reading:**
+
+1. **Llama hits a hard wall on large.** The 1.2M-char context is ~343K tokens, far past the 131K cap. Plain is honestly `does_not_fit`. Harness runs (the model CAN do sub-calls on a small sample) but scores 0.00/0.00 — 4 and 3 sub-calls respectively, ~37-40K tokens, both `final_var` early. The sub-call sample is too small for the multi-hop chain the task requires; the model is committing a guess without doing the work. The Rust and Python harnesses behaved identically on the medium slice (0.10 mean each), so the Rust 0.00 on large is in-distribution with the limit, not a regression.
+2. **Gemini plain still RUNS on large (1M cap is plenty) and beats harness.** 0.20 vs 0.10 mean. Same pattern as medium: plain sees the full 1.2M-char context in one prompt and answers; harness spends 7-32K tokens across 2-5 turns and ties at best.
+3. **The gemini seed 0 harness cell is degenerate.** 2 turns, 0 sub-calls, 6,948 tokens — the model emitted a `final_var` immediately on the first harness turn without ever sampling the context. Same pattern Phase 5d saw on the 1-turn / 0-subcall medium `auto` cell. The 60% / 85% / "no sub-call" nudges in `prompts.rs` didn't fire because the model exited at turn 2.
+
+**Combined GLaDOS scoreboard (3 sizes × 2 seeds × both modes × both models = 24 cells, $0.278 Rust-side):**
+
+| Size | Plain (gemini) | Harness (gemini) | Plain (llama) | Harness (llama) |
+|---|---|---|---|---|
+| small | 0.20 | 0.10 | 0.20 | 0.00 |
+| medium | 0.20 | 0.10 | does_not_fit | 0.10 |
+| large | 0.20 | 0.10 | does_not_fit | 0.00 |
+| **mean** | **0.20** | **0.10** | 0.20 (n=4) | 0.03 (n=6) |
+
+Plain beats harness on every cell where plain is allowed to run. Harness only matches plain (0.10 vs 0.10 on gemini medium) or ties-by-forfeit (llama medium/large: harness is the only path that runs, scores 0.10/0.00).
+
 ## Cross-harness control (Python `ReCLamO-Harness` at `022baad`)
 
 The peer ran the same 8 cells on the Python harness to answer CJ's question: are the Phase 7a results from the model or from the harness?
@@ -97,7 +126,8 @@ A known failure mode (per the peer's 2026-10-08 Poolside Laguna observation on `
 |---|---|---|---|
 | 7a.1 small | 13 | 5 | **0 / 0** |
 | 7a.2 medium | 53 | 65 | **0 / 0** |
-| **Total** | **66** | **70** | **0** |
+| 7a.3 large | 25 | 11 | **0 / 0** |
+| **Total** | **91** | **81** | **0** |
 
 Both models use the `content` channel correctly and never emit the slip. Audit logs saved as `*.audit.log` next to each JSONL.
 
@@ -107,27 +137,29 @@ Both models use the `content` channel correctly and never emit the slip. Audit l
 |---|---|---|---|
 | Phase 7a.1 | 8 | $0.036 | $0.553 |
 | Phase 7a.2 | 8 | $0.16 | $0.713 |
-| Cross-harness control (peer's spend) | 8 | ~$0.12 | $0.833 (last reported by peer) |
-| **Total Phase 7a** | **24** | **~$0.316** | — |
+| Phase 7a.3 | 8 | ~$0.082 | $0.795 |
+| Cross-harness control (peer's spend) | 8 | ~$0.12 | $0.915 (peer-reported) |
+| **Total Phase 7a** | **32** | **~$0.398** | — |
 
-Token-rate estimate undercounted by ~2× vs real OpenRouter usage (per-request markups on paid routes). Switched to real `GET /api/v1/key` for the budget. Hard stop: $7 of $10 cap. Current headroom: $6.16.
+Token-rate estimate undercounted by ~2× vs real OpenRouter usage (per-request markups on paid routes). Switched to real `GET /api/v1/key` for the budget. Verified at 2026-10-08 06:41 CDT: usage=$0.8016, limit=$10.00, remaining=$9.1984. The cross-harness control's $0.915 figure is the peer's last reported number; the key now shows $0.8016 cumulative (the peer ran on a different OpenRouter key).
 
 ## Findings (so far, for the GLaDOS slice)
 
-1. **Plain ties or beats harness on cells where plain can see the context** (7a.1 small both models, 7a.2 medium gemini). The harness's overhead — multi-turn nudges, REPL state echo, sub-call commit-prompting — is a tax that doesn't pay off on GLaDOS at these sizes.
+1. **Plain ties or beats harness on cells where plain can see the context** (7a.1 small both models, 7a.2 medium gemini, 7a.3 large gemini). The harness's overhead — multi-turn nudges, REPL state echo, sub-call commit-prompting — is a tax that doesn't pay off on GLaDOS at these sizes.
 2. **The model is the limit, not the harness** (cross-harness control). Python's heavier delegation (16-51 sub-calls, up to 567K tokens) did not improve the score.
-3. **Llama's 131K cap is a hard wall.** GLaDOS medium (≈120K tokens) and large (≈343K tokens) do not fit. Harness is the only path that runs at those sizes.
-4. **No parser slips on either model.** The `<tool_call>`-block failure mode (Poolside Laguna) is model-specific, not generic.
-5. **One task is not enough.** GLaDOS is a multi-hop chain; the model fails on the chain, not on the harness. A different task structure (e.g. a long-doc QA with a single fact in the middle) might show the harness helping. To address this, Phase 7a.3 (large) and a Cerebex control are the next informative cells.
+3. **Llama's 131K cap is a hard wall on medium and large.** GLaDOS large (≈343K tokens) doesn't fit; harness runs but the 3-4 sub-call budget is too small for the multi-hop chain. **At large, even the harness path stops helping on Llama** (0.00/0.00).
+4. **No parser slips on either model.** 172/172 completions on the GLaDOS slice used the `content` channel correctly. The `<tool_call>`-block failure mode (Poolside Laguna) is model-specific, not generic.
+5. **One task is not enough.** GLaDOS is a multi-hop chain; the model fails on the chain, not on the harness. A different task structure (e.g. a long-doc QA with a single fact in the middle) might show the harness helping. The next informative cells are: a Cerebex control (long-doc, single fact), and a third model family.
 
 ## Known limitations
 
-- **One task, two seeds.** Both cells of GLaDOS small + medium, seeds 0 and 1. Per the peer's Phase 5b noise measurement, same seed can split 0.20/0.00 across modes. We have one (large) cell left on the GLaDOS axis and seven other tasks (Cerebex, MasterControl, Multivac, Neuromancer, SELMA, SHODAN, TheDixieFlatline) on the task axis.
+- **One task, two seeds.** All three cells of GLaDOS × 2 seeds. Per the peer's Phase 5b noise measurement, same seed can split 0.20/0.00 across modes. Seven other tasks (Cerebex, MasterControl, Multivac, Neuromancer, SELMA, SHODAN, TheDixieFlatline) on the task axis remain unexercised.
 - **One model family tested cross-harness.** The Python control is on Llama 3.3 70B only. The peer did not mirror the gemini arm. Generalizing "harness doesn't help" needs at least one non-Llama cross-harness control.
 - **No `<tool_call>`-slip test on a known slipper.** Poolside Laguna is the only model we've seen emit the slip. Llama and Gemini don't. We can't claim the audit log catches all slips until we test it against a slip-emitting model.
-- **The 1.0 scoring is binary.** The eval rig scores exact match against a single `truth_repr`. There's no partial-credit; a near-miss (e.g. "passed" right, amount off by 1) is 0.0. The harness may produce closer-to-correct answers that score 0.0 because the JSON serialization round-trips. To check this: re-score 7a.1 and 7a.2 with a tolerance band.
+- **The 1.0 scoring is binary.** The eval rig scores exact match against a single `truth_repr`. There's no partial-credit; a near-miss (e.g. "passed" right, amount off by 1) is 0.0. The harness may produce closer-to-correct answers that score 0.0 because the JSON serialization round-trips. To check this: re-score 7a.1-7a.3 with a tolerance band.
 - **`forced_finish:max_iterations` is hitting** on every llama harness medium cell. The model isn't reaching a conclusion in 20 turns. The fix is either higher `max_iterations`, better mid-loop nudges, or a sub-call structure that converges faster. None of these are in scope here.
-- **The Rust harness is missing four Python fixes** (BACKLOG items #3, #4, #5, #6, #7, #8). The cross-harness control ran on the **Python** harness with all six ported (PR #52 etc.). The Rust harness's lower sub-call count at medium (4-5 vs 51) is consistent with a parser that's more conservative about which replies contain code. Whether porting the parser fixes would close the 0.20 → 0.10 gap is an open question; the per-cell score match suggests no, but the cell count is too small to be sure.
+- **Cross-harness control only covers small + medium.** The peer didn't run large on Python; whether the Rust 0.00/0.00 on large replicates on Python is unknown. The Phase 5d evidence (Python medium harness hit 0.20 on one run that did 9 sub-calls) suggests Python *might* do better on large given a heavier delegation budget, but it's not measured.
+- **The Rust harness is missing six Python fixes** (BACKLOG items #3, #4, #5, #6, #7, #8). The cross-harness control ran on the **Python** harness with all six ported (PR #52 etc.). The Rust harness's lower sub-call count at medium (4-5 vs 51) is consistent with a parser that's more conservative about which replies contain code. Whether porting the parser fixes would close the 0.20 → 0.10 gap is an open question; the per-cell score match suggests no, but the cell count is too small to be sure.
 
 ## How to reproduce
 
