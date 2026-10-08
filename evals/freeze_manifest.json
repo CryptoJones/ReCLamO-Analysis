@@ -1,0 +1,31 @@
+{
+  "files": {
+    "Cerebex.py": {
+      "bytes": 14433,
+      "sha256": "104f7fe8bd502a274091c18932f05014179c92e1ebca9de9928d254b1eb51f4a"
+    },
+    "MasterControl.py": {
+      "bytes": 6982,
+      "sha256": "cfd84bb4b5503916ab95f745b3d8ad46887051cfc01433e7ee5d16d983e66290"
+    },
+    "Multivac.py": {
+      "bytes": 11832,
+      "sha256": "87e1a66dfc9e4113ad80972fa15f97d272d1a2746523a8614d54dad9d8e0c512"
+    },
+    "Neuromancer.py": {
+      "bytes": 9461,
+      "sha256": "69d93f89c0bcb5737071a5abc722edaa049cf0ca74895929bbc10f194fabcbf8"
+    },
+    "SELMA.py": {
+      "bytes": 22999,
+      "sha256": "bade901b341924c37563945b924b476d1ba84d236d329696566637498591c8ed"
+    },
+    "_check.py": {
+      "bytes": 943,
+      "sha256": "476f542e3e184d96daa6efcdf5327f58a8724fc8a7c3c8c70fbbc80da1387a6f"
+    }
+  },
+  "generated_at": "2026-10-08T06:54:08.614063+00:00",
+  "generator_dir": "evals/gen",
+  "tool": "ReCLamO-Analysis freeze_manifest"
+}

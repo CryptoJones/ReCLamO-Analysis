@@ -1,15 +1,17 @@
-/target/
-**/*.rs.bk
-Cargo.lock.bak
+# Python bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
 
-# local eval runs (large JSONL)
-runs/
-evals/runs/
-*.jsonl
-!tests/fixtures/*.jsonl
+# Eval results (generated; per-cell, not source)
+evals/results.*.jsonl
+evals/results.jsonl
 
-# editor scratch
+# Local-only check helper
+evals/gen/_check.py
+
+# Run logs (./runs/)
+/runs/
+
+# OS
 .DS_Store
-.idea/
-.vscode/
-*.swp
