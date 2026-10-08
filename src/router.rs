@@ -38,11 +38,15 @@ pub async fn route(
     rlm::run(context, query, profile, cfg).await
 }
 
-/// `chars / 3.5`, rounded up. The estimator never lies about how much will
-/// fit.
+/// Prompt-token estimate: one token per digit, else `CHARS_PER_TOKEN` chars per
+/// token. Qwen-style tokenisers split digits one at a time, so a plain
+/// `chars/3.5` undercounts digit-heavy text by ~2x (e.g. an invoice with a
+/// 12-digit number reads 12 tokens, not 3-4). The peer's `examples/bench.py`
+/// uses the same rule so plain-mode rows line up across both harnesses.
 pub fn estimate_tokens(s: &str) -> u64 {
-    let n = s.chars().count() as f64 / CHARS_PER_TOKEN;
-    n.ceil() as u64
+    let n_digits = s.chars().filter(|c| c.is_ascii_digit()).count() as u64;
+    let n_non_digit = (s.chars().count() as u64).saturating_sub(n_digits);
+    n_digits + ((n_non_digit as f64) / CHARS_PER_TOKEN).ceil() as u64
 }
 
 /// Run the plain path.
@@ -128,5 +132,20 @@ mod tests {
     fn estimate_handles_short_text() {
         assert!(estimate_tokens("") <= 1);
         assert!(estimate_tokens("hi") <= 1);
+    }
+
+    #[test]
+    fn estimate_counts_digits_one_per() {
+        // Pure digits: one token per digit. 12 digits = 12 tokens.
+        let s = "123456789012";
+        assert_eq!(estimate_tokens(s), 12);
+    }
+
+    #[test]
+    fn estimate_mixed_digits_and_text() {
+        // "order #12345 confirmed" — 21 chars, 5 digits, 16 non-digits.
+        // Expected = 5 + ceil(16/3.5) = 5 + 5 = 10.
+        let s = "order #12345 confirmed";
+        assert_eq!(estimate_tokens(s), 5 + 5);
     }
 }
