@@ -12,7 +12,7 @@
 //! side of the harness, where the answer is bounded by code execution
 //! instead of model recall).
 
-use crate::completion::RunResult;
+use crate::completion::{RouteMode, RunResult};
 use crate::config::LoopConfig;
 use crate::error::ReclamoResult;
 use crate::providers::{CompleteOpts, Message, ModelProfile};
@@ -23,13 +23,53 @@ use std::time::Instant;
 const CHARS_PER_TOKEN: f64 = 3.5;
 
 /// Plumb `CompletionOpts` through (so the CLI's options apply).
+///
+/// `route_mode` lets the caller force one arm:
+/// - `Auto` (default): the existing `route_by_size + resident_kv` check
+///   picks. Plain if the context fits the resident budget, harness
+///   otherwise.
+/// - `Plain`: ALWAYS take the plain path. If the context exceeds
+///   `profile.max_context` (the model's real input cap, not the
+///   router budget) return `mode=plain, stop_reason=does_not_fit,
+///   answer=""` without calling the model. This mirrors the peer's
+///   `bench.py` "does not fit" semantic and is what makes the plain
+///   arm a real plain arm — the eval rig can record the cell as
+///   lost-for-size rather than silently flipping it to harness.
+/// - `Harness`: ALWAYS run the loop. `route_by_size` is bypassed.
 pub async fn route(
     context: String,
     query: String,
     profile: ModelProfile,
     cfg: LoopConfig,
+    route_mode: RouteMode,
 ) -> ReclamoResult<RunResult> {
     let est_tokens = estimate_tokens(&context) + estimate_tokens(&query);
+
+    match route_mode {
+        RouteMode::Plain => {
+            // Bypass the router. Use the model's REAL cap (`max_context`),
+            // not the router budget (`resident_kv`), because we're asking
+            // "would the model accept this whole prompt?" — that's a hard
+            // cap, not a sizing heuristic.
+            if est_tokens + cfg.plain_query_margin > profile.max_context {
+                return Ok(RunResult {
+                    answer: String::new(),
+                    mode: "plain".into(),
+                    stop_reason: "does_not_fit".into(),
+                    tokens: 0,
+                    seconds: 0.0,
+                    turns: 0,
+                    subcalls: 0,
+                });
+            }
+            return run_plain(context, query, profile, cfg).await;
+        }
+        RouteMode::Harness => {
+            // Force the loop; skip the route check entirely.
+            return rlm::run(context, query, profile, cfg).await;
+        }
+        RouteMode::Auto => {}
+    }
 
     if cfg.route_by_size && est_tokens + cfg.plain_query_margin <= profile.resident_kv {
         return run_plain(context, query, profile, cfg).await;

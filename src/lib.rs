@@ -32,7 +32,7 @@ pub mod repl;
 pub mod rlm;
 pub mod router;
 
-pub use completion::{completion, CompletionOpts, RunResult};
+pub use completion::{completion, CompletionOpts, RouteMode, RunResult};
 pub use config::{LoopConfig, Profile};
 pub use error::{ReclamoError, ReclamoResult};
 pub use providers::{

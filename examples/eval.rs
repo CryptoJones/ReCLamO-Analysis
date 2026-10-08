@@ -21,7 +21,7 @@
 use anyhow::Result;
 use reclamo_anl::{
     completion, CapabilitySet, Completion, CompletionOpts, MockProvider, ModelProfile, Profile,
-    Provider, ThinkingMode, Usage,
+    Provider, RouteMode, ThinkingMode, Usage,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -30,19 +30,49 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// One row per `(task, size, seed, mode_requested)`. The arms are
+/// honest now: `mode_requested` is the value passed to the router
+/// (`Plain` forces plain, `Harness` forces the loop, `Auto` lets
+/// `route_by_size` decide). `mode_actual` is what actually ran.
+/// If they disagree on a plain cell, the answer is `does_not_fit` on
+/// plain; if they disagree on harness, the router was overridden.
+/// The peer's rule (2026-10-08): "an explicitly requested mode must
+/// bypass the router."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Mode {
     Plain,
-    HarnessFence,
+    Harness,
+    Auto,
 }
 
 impl Mode {
-    /// The router inside `completion()` decides plain-vs-harness. We
-    /// record what we ASKED for; `mode_actual` carries the decision.
-    #[allow(dead_code)]
-    fn forced(&self) -> bool {
-        true
+    fn to_route(self) -> RouteMode {
+        match self {
+            Mode::Plain => RouteMode::Plain,
+            Mode::Harness => RouteMode::Harness,
+            Mode::Auto => RouteMode::Auto,
+        }
+    }
+    fn parse_list(s: &str) -> Result<Vec<Mode>> {
+        let mut out = Vec::new();
+        for tok in s.split(',').map(|s| s.trim()) {
+            match tok {
+                "plain" => out.push(Mode::Plain),
+                "harness" => out.push(Mode::Harness),
+                "auto" => out.push(Mode::Auto),
+                "both" => {
+                    // "both" = plain + harness, the legacy default.
+                    out.push(Mode::Plain);
+                    out.push(Mode::Harness);
+                }
+                other => anyhow::bail!("unknown mode '{other}' (want plain|harness|auto|both)"),
+            }
+        }
+        if out.is_empty() {
+            anyhow::bail!("--mode must list at least one of plain|harness|auto");
+        }
+        Ok(out)
     }
 }
 
@@ -80,6 +110,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let cfg = parse_args(&args)?;
     eprintln!("config: {cfg:?}");
+    eprintln!("modes: {:?}", cfg.modes);
 
     let provider = build_provider(&cfg)?;
     let profile = cfg.to_model_profile(provider);
@@ -92,32 +123,29 @@ async fn main() -> Result<()> {
     for task in &cfg.tasks {
         for size in &cfg.sizes {
             for seed in &cfg.seeds {
-                // Generate.
+                // Generate the (sha-pinned, frozen) context once per cell.
                 let gen = gen(task, *seed, size).await?;
                 let qchars = gen.context.len();
 
-                // Plain path: one-shot, no loop. LoopConfig::from_opts default has
-                // route_by_size=true; for a small context plain will be chosen
-                // naturally. We run both modes and let the router decide.
-                let plain_opts = CompletionOpts::default();
-                let plain_run = completion(gen.context.clone(), gen.question.clone(), profile.clone(), plain_opts).await?;
-                let plain_score = score(task, &gen.truth_repr, &plain_run.answer).await?;
+                // Each requested mode runs ONCE with the explicit
+                // RouteMode. The router no longer overrides our ask.
+                for mode in &cfg.modes {
+                    let mut opts = CompletionOpts::default();
+                    opts.route_mode = mode.to_route();
+                    let run = completion(
+                        gen.context.clone(),
+                        gen.question.clone(),
+                        profile.clone(),
+                        opts,
+                    )
+                    .await?;
+                    let sc = score(task, &gen.truth_repr, &run.answer).await?;
 
-                // Harness path: same call; the router picks the same path
-                // for the same context. mode_actual tells us which.
-                let harness_opts = CompletionOpts::default();
-                let harness_run = completion(gen.context.clone(), gen.question.clone(), profile.clone(), harness_opts).await?;
-                let harness_score = score(task, &gen.truth_repr, &harness_run.answer).await?;
-
-                for (mode, run, sc) in [
-                    (Mode::Plain, &plain_run, plain_score),
-                    (Mode::HarnessFence, &harness_run, harness_score),
-                ] {
                     let row = Row {
                         task: task.clone(),
                         size: size.clone(),
                         seed: *seed,
-                        mode_requested: mode,
+                        mode_requested: *mode,
                         mode_actual: run.mode.clone(),
                         stop_reason: run.stop_reason.clone(),
                         answer: run.answer.clone(),
@@ -140,9 +168,13 @@ async fn main() -> Result<()> {
                     entry.1 += sc;
                 }
 
+                let mode_str: Vec<String> = cfg.modes.iter().map(|m| format!("{m:?}")).collect();
                 eprintln!(
-                    "{} {} seed={} | plain={:.2} harness={:.2}",
-                    task, size, seed, plain_score, harness_score,
+                    "{} {} seed={} | {}",
+                    task,
+                    size,
+                    seed,
+                    mode_str.join(", "),
                 );
             }
         }
@@ -165,7 +197,7 @@ struct EvalCfg {
     tasks: Vec<String>,
     sizes: Vec<String>,
     seeds: Vec<u32>,
-    mode: String,
+    modes: Vec<Mode>,
     out: PathBuf,
 }
 
@@ -177,7 +209,7 @@ impl std::fmt::Debug for EvalCfg {
             .field("tasks", &self.tasks)
             .field("sizes", &self.sizes)
             .field("seeds", &self.seeds)
-            .field("mode", &self.mode)
+            .field("modes", &self.modes)
             .field("out", &self.out)
             .finish()
     }
@@ -215,7 +247,7 @@ fn parse_args(args: &[String]) -> Result<EvalCfg> {
     ];
     let mut sizes = vec!["small".to_string()];
     let mut seeds = vec![0u32];
-    let mut mode = "both".to_string();
+    let mut mode_arg = "both".to_string();
     let mut out = PathBuf::from("evals/results.jsonl");
 
     let mut i = 1;
@@ -251,7 +283,7 @@ fn parse_args(args: &[String]) -> Result<EvalCfg> {
                 i += 2;
             }
             "--mode" => {
-                mode = args[i + 1].clone();
+                mode_arg = args[i + 1].clone();
                 i += 2;
             }
             "--out" => {
@@ -261,6 +293,7 @@ fn parse_args(args: &[String]) -> Result<EvalCfg> {
             _ => anyhow::bail!("unknown arg {a}"),
         }
     }
+    let modes = Mode::parse_list(&mode_arg)?;
     Ok(EvalCfg {
         provider,
         model,
@@ -269,7 +302,7 @@ fn parse_args(args: &[String]) -> Result<EvalCfg> {
         tasks,
         sizes,
         seeds,
-        mode,
+        modes,
         out,
     })
 }

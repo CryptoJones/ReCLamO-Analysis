@@ -494,4 +494,50 @@ mod tests {
         assert_eq!(res.mode, "plain");
         assert!(!res.answer.is_empty());
     }
+
+    #[tokio::test]
+    async fn explicit_harness_bypasses_router_on_small_context() {
+        // A small context that the router would send to plain. With
+        // `RouteMode::Harness` the loop must run anyway — the explicit
+        // request wins, otherwise the eval rig's "plain-vs-harness"
+        // comparison is meaningless (the peer flagged this 2026-10-08).
+        use crate::completion::{completion, RouteMode};
+        let scripted = vec![Completion {
+            content: "FINAL(not used; loop ran)".into(),
+            reasoning: None,
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+        }];
+        let profile = make_profile(scripted);
+        let mut opts = CompletionOpts::default();
+        opts.route_mode = RouteMode::Harness;
+        let res = completion("tiny".into(), "q".into(), profile, opts).await.unwrap();
+        assert_eq!(res.mode, "harness:fence", "explicit Harness must bypass the router");
+    }
+
+    #[tokio::test]
+    async fn explicit_plain_reports_does_not_fit_when_oversize() {
+        // A context that exceeds `max_context` (the model's REAL cap)
+        // returns `does_not_fit` on the plain arm, not a silent flip
+        // to harness. Mirrors `examples/bench.py` on the harness side.
+        use crate::completion::{completion, RouteMode};
+        let scripted = vec![Completion {
+            content: "should not be called".into(),
+            reasoning: None,
+            tool_calls: vec![],
+            stop_reason: "stop".into(),
+            usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+        }];
+        let profile = make_profile(scripted);
+        // Build a 20k-token context; `profile.max_context = 16_384`
+        // so `est_tokens + 2K margin > 16_384` → does_not_fit.
+        let big = "x".repeat(20_000 * 4); // 80k chars ≈ 22.8k tokens
+        let mut opts = CompletionOpts::default();
+        opts.route_mode = RouteMode::Plain;
+        let res = completion(big, "q".into(), profile, opts).await.unwrap();
+        assert_eq!(res.mode, "plain");
+        assert_eq!(res.stop_reason, "does_not_fit");
+        assert_eq!(res.answer, "");
+    }
 }
