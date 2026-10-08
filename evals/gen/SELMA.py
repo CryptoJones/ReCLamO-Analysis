@@ -1,7 +1,7 @@
 import random
 import re
 import string
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 
 # Predefined pools for natural-sounding generation
 FIRST_NAMES = ["Alex", "Blake", "Casey", "Dana", "Elliot", "Finley", "Gray", "Harper", "Avery", "Quinn", "Riley", "Taylor", "Jordan", "Morgan", "Jamie", "Peyton", "Reese", "Skyler", "Frankie", "Leslie"]
@@ -70,7 +70,7 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     # Add some more people for variety
     for _ in range(15):
         people.add(_rand_name(rng))
-    people = list(people)
+    people = sorted(list(people))  # Sort for deterministic iteration
     
     # We'll generate a timeline of events from 2023 to 2026
     timeline = []
@@ -97,7 +97,9 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
         ])
         
         if event_type == "assign" and current_owner is None:
-            new_owner = rng.choice([p for p in people if p != initiator])
+            # Choose new owner from people, excluding initiator
+            available_people = [p for p in people if p != initiator]
+            new_owner = rng.choice(available_people)
             new_dept = _rand_dept(rng)
             timeline.append((date_str, "assign", new_owner, new_dept))
             current_owner = new_owner
@@ -106,10 +108,14 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
             # Sometimes reassign to same person but different dept (role change)
             if rng.random() < 0.3:
                 new_dept = _rand_dept(rng)
-                while new_dept == current_dept:
+                # Ensure dept change
+                attempts = 0
+                while new_dept == current_dept and attempts < 10:
                     new_dept = _rand_dept(rng)
-                timeline.append((date_str, "reassign", current_owner, new_dept))
-                current_dept = new_dept
+                    attempts += 1
+                if new_dept != current_dept:  # Only add if changed
+                    timeline.append((date_str, "reassign", current_owner, new_dept))
+                    current_dept = new_dept
             else:
                 new_owner = rng.choice([p for p in people if p != current_owner])
                 new_dept = _rand_dept(rng)
@@ -131,10 +137,13 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
             else:
                 # Correction to dept only
                 new_dept = _rand_dept(rng)
-                while new_dept == current_dept:
+                attempts = 0
+                while new_dept == current_dept and attempts < 10:
                     new_dept = _rand_dept(rng)
-                timeline.append((date_str, "correct", current_owner, new_dept))
-                current_dept = new_dept
+                    attempts += 1
+                if new_dept != current_dept:  # Only add if changed
+                    timeline.append((date_str, "correct", current_owner, new_dept))
+                    current_dept = new_dept
         # For delegate and note, we might not change ownership but generate email
         # We'll handle email generation separately
         
@@ -147,12 +156,13 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     # Now generate actual email text for each timeline event, plus filler
     all_entries = []
     
-    # Add the kickoff email as first entry
+    # Add the kickoff email as first entry (date fixed to match timeline[0][0]).
+    _ky, _km, _kd = timeline[0][0].split("-")
     all_entries.append((
         timeline[0][0],  # date
         f"From: {initiator} <{initiator.lower().replace(' ', '.')}@company.com>\n"
         f"To: {dept} Team <{dept.lower()}@company.com>\n"
-        f"Date: {_rand_date(rng, 2023, 2023)}\n"
+        f"Date: {MONTHS[int(_km) - 1]} {int(_kd)}, {_ky}\n"
         f"Subject: Kickoff: {project} AI Ethics Review\n\n"
         f"Hi team,\n\n"
         f"We're starting the AI Ethics Review for Project {project}. "
@@ -174,9 +184,10 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
         # Generate subject and body based on event type
         if etype == "assign":
             subject = f"Update: AI Ethics Review Lead Assigned"
+            proj = rng.choice(PROJECTS)  # For variety in email
             body = (
                 f"Hi {recipient.split()[0] if 'Team' not in recipient else 'team'},\n\n"
-                f"I'm assigning the AI Ethics Review for Project {rng.choice(PROJECTS)} to "
+                f"I'm assigning the AI Ethics Review for Project {proj} to "
                 f"{owner} from {dept_val}. Please direct all related questions to them.\n"
                 f"Thanks,\n{sender}"
             )
@@ -201,19 +212,46 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
                     f"Thanks,\n{sender}"
                 )
         elif etype == "decline":
-            subject = f"Update: Unable to Lead AI Ethics Review"
+            # Note: the truth computation treats "decline" as an ownership-changing event
+            # that sets current_owner = None. The original email text said "Please reassign
+            # this responsibility" but never said the position is now empty, so a careful
+            # reader tracking only the most recent email could easily leave the original
+            # lead in mind. Make it explicit so the email matches the truth.
+            subject = f"Update: AI Ethics Review Lead Declined -- Position Now Unassigned"
             body = (
-                f"Hi {recipient.split()[0] if 'Team' not in recipient else 'team'},\n\n"
-                f"Unfortunately, I need to decline leading the AI Ethics Review due to bandwidth constraints. "
-                f"Please reassign this responsibility.\n"
+                f"Hi team,\n\n"
+                f"I'm writing to confirm that the previous AI Ethics Review lead has declined "
+                f"the role due to bandwidth constraints. Effective immediately, the AI Ethics "
+                f"Review lead position is unassigned until a new lead can be confirmed. "
+                f"Please update your records and re-circulate the call for a new lead.\n"
                 f"Thanks,\n{sender}"
             )
         elif etype == "cancel":
-            subject = f"Update: AI Ethics Review Postponed"
+            # Same as above: the truth is "Unassigned" after a cancel event; spell it out
+            # in the body so the thread stays consistent with the key.
+            subject = f"Update: AI Ethics Review Cancelled -- Position Now Unassigned"
             body = (
                 f"Hi team,\n\n"
-                f"The AI Ethics Review for Project {rng.choice(PROJECTS)} has been postponed indefinitely. "
-                f"No further action is required at this time.\n"
+                f"The AI Ethics Review for Project {rng.choice(PROJECTS)} has been cancelled "
+                f"and the lead position is now unassigned. No further action is required from "
+                f"the previous reviewers and ownership will need to be re-confirmed before any "
+                f"follow-up work begins.\n"
+                f"Thanks,\n{sender}"
+            )
+        elif etype == "unassign":
+            # Originally this fell through to the generic "Note: AI Ethics Review Update"
+            # else-branch and produced an email that said "the AI Ethics Review is
+            # progressing well. The team is handling the current deliverables.", which was
+            # inconsistent with the truth key (which was now "Unassigned" because the
+            # timeline's unassign event clears current_owner = None). The latest AI Ethics
+            # email in the thread would then quietly disagree with the key. Add an explicit
+            # branch that surfaces the unassigned state in the same prose style.
+            subject = f"Update: AI Ethics Review Lead Unassigned"
+            body = (
+                f"Hi team,\n\n"
+                f"This is to confirm that the AI Ethics Review lead position is now "
+                f"unassigned. We are looking for a new lead to take over ownership and "
+                f"will circulate a call for nominations shortly.\n"
                 f"Thanks,\n{sender}"
             )
         elif etype == "correct":
@@ -250,7 +288,12 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
                 f"Thanks,\n{sender}"
             )
         
-        date_readable = _rand_date(rng, int(date_str[:4]), int(date_str[:4]))
+        # FIX: the visible email date must match the timeline's date_str, otherwise
+        # the rendered timeline order contradicts the date headers in the email
+        # (the audit found 34% of seeds disagreed). Build a "Month DD, YYYY" form
+        # directly from date_str so the two stay in lockstep.
+        _year, _month, _day = date_str.split("-")
+        date_readable = f"{MONTHS[int(_month) - 1]} {int(_day)}, {_year}"
         email_text = (
             f"From: {sender} <{sender.lower().replace(' ', '.')}@company.com>\n"
             f"To: {recipient}@company.com\n"
@@ -284,7 +327,11 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     # Add filler emails until we reach target
     while current_size < target_chars:
         sender = rng.choice(people)
-        recipient = rng.choice([f"{dept} Team" for dept in DEPTS] + [p for p in people if p != sender])
+        # Recipient: team or individual
+        if rng.random() < 0.5:
+            recipient = f"{rng.choice(DEPTS).lower()} Team"
+        else:
+            recipient = rng.choice([p for p in people if p != sender])
         topic = rng.choice(filler_topics)
         project_filler = rng.choice(PROJECTS)
         date_filler = _rand_date(rng, 2023, 2026)
@@ -388,99 +435,103 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     }
 
 def score(answer_text: str, truth) -> float:
+    """Robust scorer for SELMA.
+
+    - 1.0 when the answer unambiguously states the truth (case-insensitive,
+      tolerant of formatting, prose wrapping, quotes, JSON, markdown, etc.)
+      AND does NOT name a competing candidate as the "final" or "current" owner.
+    - 0.3 when the answer hedges (names a competing candidate alongside the
+      truth, or denies the truth while naming another).
+    - 0.0 when nothing of substance is found, or a different name is named
+      as the answer.
     """
-    Score the answer against the ground truth.
-    - Case-insensitive
-    - Ignores surrounding punctuation and whitespace
-    - Ignores extra prose before/after but requires the core answer to be present
-    - For names: must match the exact person (first + last) as assigned
-    - "Unassigned" is a special case
-    """
-    if not isinstance(answer_text, str):
+    if not isinstance(answer_text, str) or not answer_text.strip():
         return 0.0
-    
-    # Normalize: lower case, strip whitespace, remove punctuation at edges
-    normalized = answer_text.strip().lower()
-    # Remove common punctuation that might surround the answer
-    normalized = normalized.strip(string.punctuation + string.whitespace)
-    
-    # Handle truth
+
+    text = answer_text.strip()
+    text_low = text.lower()
+
     if truth == "Unassigned":
-        expected = "unassigned"
+        truth_low = "unassigned"
+        truth_words = ["unassigned"]
     else:
-        # Expected is the full name in lower case
-        expected = truth.lower()
-    
-    # Check for exact match (after normalization)
-    if normalized == expected:
-        return 1.0
-    
-    # Allow for common variations: missing middle initial, etc. but we don't generate those
-    # Also allow if the answer is embedded in a sentence but we require it to be the core answer
-    # We'll check if the normalized string equals expected, or if it's a sentence that ends/starts with it
-    # But to avoid being too lenient, we'll require that after stripping, it matches
-    # However, we should allow for punctuation like periods at the end
-    # We already stripped punctuation, so if they wrote "Alex Smith." it becomes "alex smith"
-    
-    # Additionally, check if the expected string is a substring and the answer is short
-    # But to avoid false positives (e.g., "alex" matching "alex smith"), we require word boundaries
-    # Since we normalized, we can split and check
-    if expected == "unassigned":
-        # Check if the answer is exactly unassigned, possibly with extra words
-        # We'll be strict: must be exactly unassigned
-        if normalized == "unassigned":
+        truth_low = truth.lower().strip()
+        truth_words = truth_low.split()
+
+    # Detect hedge words that would suggest competing candidates.
+    hedge_patterns = [
+        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|"
+        r"could be|might be|not\s+\w+)\b",
+    ]
+    has_hedge_word = any(
+        re.search(pat, text_low) for pat in hedge_patterns
+    )
+
+    # For "Unassigned" truth, look for the word "unassigned" in the answer.
+    if truth == "Unassigned":
+        if re.search(r"\bunassigned\b", text_low):
+            # If the answer also says "not unassigned" or hedges, drop below 1.0.
+            if re.search(r"\bnot\s+unassigned\b|\bnever\s+unassigned\b", text_low):
+                return 0.0
+            if has_hedge_word:
+                return 0.3
             return 1.0
-        # But allow common phrases like "The owner is unassigned" -> we want to detect that
-        # So we'll check if the normalized string contains "unassigned" and is not too long
-        words = normalized.split()
-        if len(words) <= 3 and "unassigned" in words:
-            # Check that it's not like "assigned" or "unassignedly"
-            for i, w in enumerate(words):
-                if w == "unassigned":
-                    # Check surroundings
-                    if (i == 0 or words[i-1] in ["the", "is", "was", "current", "final"]) and \
-                       (i == len(words)-1 or words[i+1] in [".", "!", "", "is", "was"]):
-                        return 1.0
-            # If we get here, it's ambiguous
+        # "None" / "No one" / "nobody" / "empty" are also valid unassigned phrasings.
+        if re.search(r"\b(none|no\s+one|nobody|nothing|empty|vacant|unfilled)\b", text_low):
+            if has_hedge_word:
+                return 0.3
+            return 1.0
+        # Otherwise wrong (the answer names someone or is gibberish).
+        return 0.0
+
+    # Truth is a name. Check for the full name (case-insensitive) anywhere in
+    # the answer, OR last-first form.
+    name_variants = [truth_low]
+    if len(truth_words) == 2:
+        last_first = truth_words[1] + ", " + truth_words[0]
+        name_variants.append(last_first)
+    truth_present = any(v in text_low for v in name_variants)
+
+    if not truth_present:
+        return 0.0
+
+    # Find other candidate names mentioned in the answer (Title-Case multi-word).
+    other_name_pattern = re.compile(
+        r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)\b"
+    )
+    other_candidates = [
+        n.lower() for n in other_name_pattern.findall(text)
+    ]
+    other_candidates = [
+        n for n in other_candidates
+        if n != truth_low and n not in name_variants
+    ]
+
+    # Check whether the answer says "the final owner is X" or "current owner is X"
+    # pointing at a competing candidate.
+    is_phrases = re.findall(
+        r"\b(?:final|current|new|latest|now|true|actual|real|new)\s+"
+        r"(?:final\s+)?owner\s+is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)",
+        text,
+    )
+    is_phrases_low = [s.lower() for s in is_phrases]
+    # If the answer names a competing candidate as "the final/current owner",
+    # the answer is wrong about the truth.
+    if is_phrases_low and any(p != truth_low for p in is_phrases_low):
+        return 0.0
+
+    # If the answer says "moved from <truth> to <other>; the final owner is <other>"
+    # this is a hedge that explicitly picks the wrong person.
+    if other_candidates and has_hedge_word:
+        # Look for a hedge that resolves to a competing candidate.
+        denial = re.search(
+            r"\bnot\s+" + re.escape(truth_low), text_low
+        )
+        if denial:
             return 0.0
-    else:
-        # For names: check if the normalized answer matches the expected name
-        # We'll split into words and check if all expected words appear in order
-        expected_words = expected.split()
-        answer_words = normalized.split()
-        
-        # Check for exact sequence
-        if answer_words == expected_words:
-            return 1.0
-        
-        # Check if answer_words contains expected_words as a subsequence (in order)
-        # But we don't want to allow missing words (e.g., just "Alex" for "Alex Smith")
-        # So we require all expected words to be present
-        if all(word in answer_words for word in expected_words):
-            # Now check if they appear in the right order (simple version: find first occurrence of each)
-            # This is not perfect but good enough for our case
-            try:
-                positions = []
-                for word in expected_words:
-                    pos = answer_words.index(word)
-                    positions.append(pos)
-                # Check if positions are increasing
-                if all(positions[i] <= positions[i+1] for i in range(len(positions)-1)):
-                    # Additionally, check that there are no extra words that change meaning
-                    # We'll be lenient: allow extra words at beginning or end
-                    # But not in the middle that would break the name
-                    # Actually, if they wrote "Alex Jay Smith" for "Alex Smith", that's wrong
-                    # So we need to ensure no extra words between the expected words
-                    # Re-check: the sequence must be contiguous
-                    # Find where the subsequence starts
-                    for start in range(len(answer_words) - len(expected_words) + 1):
-                        if answer_words[start:start+len(expected_words)] == expected_words:
-                            return 1.0
-            except ValueError:
-                pass
-    
-    # If we get here, no match
-    return 0.0
+        return 0.3
+
+    return 1.0
 
 if __name__ == "__main__":
     # Print stats for seed 0 at each size
@@ -509,3 +560,110 @@ if __name__ == "__main__":
             assert s < 1.0, f"Wrong answer scored too high: '{wrong}' -> {s}"
             print(f"Wrong answer '{wrong}' scored: {s:.2f}")
         print("-" * 50)
+
+    # ----- Defect-specific regression assertions -----
+    # Original bug: a random `unassign` side-effect could fire after the last email about
+    # AI Ethics, setting the truth key to "Unassigned" without producing any clear email
+    # that said so; the same problem existed for the decline/cancel paths. The solver
+    # looking at the latest AI Ethics email would still see a named lead in the
+    # signature/declination text. The fix (1) makes unassign a dedicated email branch
+    # that says "the lead position is now unassigned", and (2) makes decline/cancel
+    # emails explicitly state that the position is now unassigned. This assertion proves
+    # the TRUTH matches the LAST ownership-changing email for every (seed, size) cell.
+    # Concretely: if the truth is "Unassigned", the most recent AI Ethics email must
+    # mention "unassigned". If the truth is a name, that name must appear in the most
+    # recent AI Ethics email (as the person who is now in the role).
+    import re as _re_selma
+    _SUBJ_PAT = _re_selma.compile(r"Subject:\s*([^\n]+)")
+    _SUBJ_BACKSLASH = chr(92)
+    for seed in range(10):
+        for size in ["small", "medium", "large"]:
+            d = generate(seed, size)
+            ctx = d["context"]
+            truth = d["answer"]
+            # Find the most recent AI Ethics email by scanning from the end.
+            last_email = None
+            ix = len(ctx)
+            while True:
+                prev = ctx.rfind("From: ", 0, ix)
+                if prev == -1:
+                    break
+                chunk = ctx[prev:ix]
+                if "AI Ethics" in chunk:
+                    last_email = chunk
+                    break
+                ix = prev
+            assert last_email is not None, (
+                "No AI Ethics email found at all (seed=" + str(seed) + ", size=" + size + ")"
+            )
+            _m = _SUBJ_PAT.search(last_email)
+            subj_str = _m.group(1) if _m else "?"
+            if truth == "Unassigned":
+                assert "unassigned" in last_email.lower(), (
+                    "SELMA defect: truth is 'Unassigned' but latest AI Ethics email "
+                    "does not say 'unassigned' (seed=" + str(seed) + ", size=" + size + "). "
+                    "Email subject: " + repr(subj_str)
+                )
+            else:
+                assert truth in last_email, (
+                    "SELMA defect: truth is " + repr(truth) + " but latest AI Ethics email "
+                    "does not name them (seed=" + str(seed) + ", size=" + size + "). "
+                    "Email subject: " + repr(subj_str)
+                )
+    print("SELMA: defect-specific assertions PASS (truth consistent with last ownership email).")
+
+    # ----- Scorer regression: every format the audit probes must score 1.0 -----
+    import json as _json_selma
+    for seed in range(5):
+        d = generate(seed, "small")
+        truth = d["answer"]
+        if truth == "Unassigned":
+            positives = {
+                "as_is": "Unassigned",
+                "sentence": "The answer is Unassigned.",
+                "bold": "**Unassigned**",
+                "bold_in_sentence": "The owner is **Unassigned**.",
+                "json": _json_selma.dumps({"owner": "Unassigned"}),
+                "lead_in_explanation": "After applying every amendment and reversal, the owner is Unassigned.",
+                "trailing_explanation": "Unassigned (after applying all corrections in the archive)",
+                "final_answer_tag": "Final answer: Unassigned",
+                "code_span": "`Unassigned`",
+                "uppercase": "UNASSIGNED",
+                "lowercase": "unassigned",
+                "newline_after": "Unassigned\n",
+                "quoted": '"Unassigned"',
+                "sentence_currently": "The AI Ethics Review is currently unassigned.",
+                "no_one": "No one is currently assigned (Unassigned).",
+                "dash_explain": "Unassigned - the last owner was removed and nobody replaced them.",
+                "final_owner_unassigned": "Final owner: Unassigned",
+                "none": "None",
+            }
+        else:
+            positives = {
+                "as_is": truth,
+                "sentence": f"The answer is {truth}.",
+                "bold": f"**{truth}**",
+                "bold_in_sentence": f"The owner is **{truth}**.",
+                "json": _json_selma.dumps({"owner": truth}),
+                "lead_in_explanation": f"After applying every amendment and reversal, the owner is {truth}.",
+                "trailing_explanation": f"{truth} (after applying all corrections in the archive)",
+                "final_answer_tag": f"Final answer: {truth}",
+                "code_span": f"`{truth}`",
+                "uppercase": truth.upper(),
+                "lowercase": truth.lower(),
+                "newline_after": f"{truth}\n",
+                "quoted": f'"{truth}"',
+                "final_owner_label": f"Final owner: {truth}",
+                "with_dept": f"{truth} (Engineering)",
+                "possessive": f"It is {truth}'s responsibility.",
+                "md_bold_in_sentence": f"The final owner is **{truth}**.",
+                "last_first": f"{truth.split()[-1]}, {truth.split()[0]}",
+                "quoted_in_sentence": f"The final owner is \"{truth}\".",
+                "name_then_comma": f"{truth}, who took over after the last reassignment.",
+            }
+        for k, s in positives.items():
+            sc = score(s, d["answer"])
+            assert sc == 1.0, (
+                f"SELMA positive {k!r} should score 1.0 (seed={seed}); got {sc}"
+            )
+    print("SELMA: scorer regression battery PASS (formats in).")

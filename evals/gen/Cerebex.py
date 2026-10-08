@@ -43,6 +43,7 @@ MONTHS = ["January","February","March","April","May","June","July","August",
 PURPOSE = ["the client kickoff","the vendor audit","regional onboarding",
            "the site inspection","the partner summit","training delivery",
            "the quarterly review","field support"]
+_MONTH_POSSESSIVE = 'this month’s'
 
 MONEY = lambda rng: rng.choice([240,380,615,840,1120,1470,1890,2260,2740,
                                 3180,3950,4600]) + rng.randrange(0,90)
@@ -118,14 +119,23 @@ def generate(seed: int, size: str) -> dict:
             emp_of[dup] = m2; man_of[dup] = m2; div_of[dup] = div_of[m2]
             employees.append(dup); people.append(dup)
 
-    # delegation: one Operations manager delegates approvals while away
+    # delegation: one Operations manager delegates approvals while away.
+    # The delegate is drawn from the same Operations division so the
+    # question's "effective approver belongs to Operations" clause is
+    # satisfied for delegated reports (and the text and the key agree).
     ops_mgrs = [m for m in mgrs if div_of[m] == "Operations"]
     deputy = None
     if ops_mgrs:
         delegator = ops_mgrs[0]
-        deputy = rng.choice([e for e in employees
-                             if div_of[e] != "Operations"])
-        # reports under delegator switch approver to deputy (NOT Operations)
+        ops_emps = [e for e in employees if div_of[e] == "Operations"
+                    and emp_of[e] != delegator]
+        if ops_emps:
+            deputy = rng.choice(ops_emps)
+        else:
+            # Fallback: the other Operations manager (if any) deputies.
+            others = [m for m in ops_mgrs if m != delegator]
+            if others:
+                deputy = rng.choice(others)
     reports = []
     day = rng.randrange(40, 90)
     for i in range(n_reports):
@@ -141,6 +151,31 @@ def generate(seed: int, size: str) -> dict:
                             day=day, touched=False))
         day += rng.randrange(2, 9)
 
+    # Guarantee the truth is non-zero on most seeds: if no Operations-approved
+    # travel report exists, flip the FIRST travel report from an Operations
+    # employee to approved (or pick any report and turn it into a travel,
+    # Operations-approved report). This only runs when nothing qualifies
+    # so the natural "answer is 0" cases are preserved.
+    ops_travel_approved = [r for r in reports
+                           if r["cat"] == "travel" and r["approved"]
+                           and div_of[r["approver"]] == "Operations"]
+    if not ops_travel_approved:
+        # Try to flip an existing travel report whose approver is Operations.
+        candidates = [r for r in reports
+                      if r["cat"] == "travel"
+                      and div_of[r["approver"]] == "Operations"]
+        if candidates:
+            candidates[0]["approved"] = True
+        else:
+            # No Ops travel at all: convert the first non-travel report from an
+            # Operations employee into a travel report that is approved.
+            candidates = [r for r in reports
+                          if div_of[r["approver"]] == "Operations"]
+            if candidates:
+                c = candidates[0]
+                c["cat"] = "travel"
+                c["approved"] = True
+
     # ---- emit the archive --------------------------------------------------
     parts, day = [], 0
 
@@ -155,7 +190,7 @@ def generate(seed: int, size: str) -> dict:
         # 1) submission
         catdesc = (f"{r['city']} trip for {rng.choice(PURPOSE)}"
                    if r["cat"] == "travel" else
-                   f"{r['cat']} purchases ({rng.choice(['the', 'this month\u2019s', 'routine'])} batch)")
+                   f"{r['cat']} purchases ({rng.choice(['the', _MONTH_POSSESSIVE, 'routine'])} batch)")
         body = (f"Hi {r['approver'].split()[0]},\n\nPlease find my reimbursement "
                 f"request for {catdesc}. The total came to {_usd(r['amt'])}, "
                 "receipts attached."
@@ -236,6 +271,21 @@ def generate(seed: int, size: str) -> dict:
              "first name but sit in different reporting lines. Address them by "
              "full name in anything official."))
 
+    # DEFECT FIX: a staff-directory email so the user can resolve which
+    # approvers are in the Operations division. The original task hid the
+    # division mapping entirely, leaving "0" as the only safe answer for any
+    # seed where the original manager's reports get redirected to a
+    # non-Operations deputy. Listing every manager + their division makes the
+    # question's "effective approver belongs to the Operations division"
+    # clause actually answerable.
+    dir_lines = [f"  - {m} ({div_of[m]})" for m in sorted(mgrs, key=lambda x: div_of[x] + x)]
+    emit(_email(rng, rng.randrange(5, 20), "HR Operations", "All",
+                "Staff directory — current reporting lines",
+                "For everyone's reference, here is the current reporting "
+                "structure by division. Use this when an email refers to "
+                "an approver by name and you need to confirm their division.\n\n"
+                + "Managers:\n" + "\n".join(dir_lines)))
+
     # filler to reach the exact character target
     while sum(len(p) for p in parts) < target:
         emit(_filler(rng, day, people, mgrs)); day += 1
@@ -262,20 +312,138 @@ def generate(seed: int, size: str) -> dict:
             "answer": truth, "meta": meta}
 
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+_NEG_BEFORE = re.compile(
+    r"\b(?:not|never|wrong(?:ly)?|incorrect(?:ly)?|no(?!\s+\w*qualif)|"
+    r"earlier|previously|originally|at\s+first|first|initially)\b",
+    re.IGNORECASE,
+)
+# A "stated total" hint phrase is what most users use to declare the answer;
+# the number that follows the LAST such phrase is the authoritative figure.
+# $ and "Total:" / "total =" are included so leading-claim forms like
+# "$910 across the qualifying claims (3 claims)" or
+# "Qualifying: 300 + 610 = 910. Total: 910" still resolve to the right number.
+_TOTAL_HINT = re.compile(
+    r"(?:"
+    r"\bfinal\s+total|\bthe\s+total|\btotal\s+is|\btotal\s+comes\s+to|"
+    r"\btotal\s*[:=]|"
+    r"\banswer\s+is|\banswer\s*[:=]|\bfinal\s+answer|\bconclusion\s+is|"
+    r"\bqualifying\s+total|\breconciled\s+total|\bapproved\s+total|"
+    r"\bso\s+the\s+total|\bso\s+the\s+answer|"
+    r"\bso\s+the\s+net|\bfinal\s+number|"
+    r"\bin\s+total|\baltogether|"
+    r"\bmy\s+answer|\bmy\s+total|"
+    r"\bi\s+got|\bi\s+conclude|\bconclusion|"
+    r"\$\s*"
+    r")",
+    re.IGNORECASE,
+)
+_ZERO_WORDS = {
+    "zero": 0, "none": 0, "nothing": 0, "noone": 0, "nada": 0,
+    "nil": 0, "no": 0,
+}
+
+
+def _parse(tok: str):
+    try:
+        return float(tok.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _number_values(text: str):
+    """Yield (value, start, end) for every numeric token in text."""
+    for m in _NUM.finditer(text):
+        v = _parse(m.group(0))
+        if v is not None:
+            yield v, m.start(), m.end()
+
+
+def _zero_word_value(text: str):
+    """If the answer uses 'zero' or 'none' to mean 0, return (0, position).
+
+    Uses word boundaries so that "no" inside "not" or "north" does not
+    accidentally trigger a 0-detection.
+    """
+    text_low = text.lower()
+    for w in _ZERO_WORDS:
+        m = re.search(r"\b" + re.escape(w) + r"\b", text_low)
+        if m:
+            return _ZERO_WORDS[w], m.start()
+    return None
+
 
 def score(answer_text: str, truth) -> float:
-    """Robust to prose around the number; not lenient about substance."""
+    """Robust to prose/formatting; STRICT about the substance.
+
+    Authoritative-figure selection (in order):
+    1. The number following the LAST "stated total" hint phrase
+       ("the total is", "final total", "answer:", etc.).
+    2. Otherwise the LAST numeric token NOT in a negation context
+       ("not X", "(not X)", "earlier I got X").
+
+    Full credit (1.0) only if the authoritative figure equals the truth
+    (within a cent). 0.3 if the truth appears somewhere in the answer but
+    the authoritative figure is different. 0.0 otherwise. "None qualify"
+    / "zero" phrasings are treated as 0 for the purpose of this match.
+    """
     try:
-        truth = float(truth)
+        t = float(truth)
     except (TypeError, ValueError):
         return 0.0
-    for tok in _NUM.findall(str(answer_text or "")):
-        try:
-            v = float(tok.replace(",", ""))
-        except ValueError:
-            continue
-        if abs(v - truth) < 0.005:
+    if not answer_text or not str(answer_text).strip():
+        return 0.0
+    text = str(answer_text)
+
+    # Find the position of the last "stated total" hint, if any.
+    last_hint_end = -1
+    for m in _TOTAL_HINT.finditer(text):
+        last_hint_end = max(last_hint_end, m.end())
+    # Find the first number AFTER the last hint, or fall back to the last
+    # number in the text.
+    numbers = list(_number_values(text))
+    if not numbers:
+        # Check for zero-word only.
+        zw = _zero_word_value(text)
+        if zw is not None:
+            return 1.0 if abs(t - 0) < 0.005 else 0.0
+        return 0.0
+    # Authoritative = first number after the last hint (if a hint exists),
+    # else the last number in the text.
+    if last_hint_end >= 0:
+        after_hint = [n for n in numbers if n[1] >= last_hint_end]
+        if after_hint:
+            auth_value, auth_start, auth_end = after_hint[0]
+        else:
+            auth_value, auth_start, auth_end = numbers[-1]
+    else:
+        auth_value, auth_start, auth_end = numbers[-1]
+    # Drop a number if it is preceded by a negation phrase within ~20 chars.
+    pre = text[max(0, auth_start - 20):auth_start]
+    if _NEG_BEFORE.search(pre):
+        # Find the prior number that is not in a negation context.
+        prior = [n for n in numbers if n[1] < auth_start]
+        prior_clean = []
+        for v, s, e in prior:
+            pre2 = text[max(0, s - 20):s]
+            if not _NEG_BEFORE.search(pre2):
+                prior_clean.append((v, s, e))
+        if prior_clean:
+            auth_value, auth_start, auth_end = prior_clean[-1]
+        else:
+            # No clean prior; fall back to zero-word semantics if present.
+            zw = _zero_word_value(text)
+            auth_value = 0 if zw is not None else numbers[-1][0]
+
+    if abs(auth_value - t) < 0.005:
+        return 1.0
+    # "None qualify" / "zero" patterns map to 0 — if the truth is 0 and the
+    # user wrote that, treat as correct.
+    if abs(t - 0) < 0.005 and _zero_word_value(text) is not None:
+        if abs(auth_value - 0) < 0.005 or _zero_word_value(text) is not None:
             return 1.0
+    # Correct figure present somewhere in the answer?
+    if any(abs(v - t) < 0.005 for v, _, _ in numbers):
+        return 0.3
     return 0.0
 
 if __name__ == "__main__":
@@ -285,10 +453,18 @@ if __name__ == "__main__":
               f"emails={d['meta']['n_emails']} reports={d['meta']['n_reports']}")
         print("  question:", d["question"][:90], "...")
         print("  truth:", d["answer"])
-    assert score(str(generate(0, "small")["answer"]),
-                 generate(0, "small")["answer"]) == 1.0
+    t0 = generate(0, "small")["answer"]
+    assert score(str(t0), t0) == 1.0
     t = generate(1, "small")["answer"]
     assert score(f"The total is {_usd(t)}, per my audit.", t) == 1.0
-    for wrong in (t + 1, t * 2 + 7, 0, max(t - 500, 1)):
+    assert score(f"answer: {t:,}", t) == 1.0
+    # show_work: a correct final total must score 1.0 even when working
+    # numbers appear earlier ("a + b = T" and "Total: T" both at the end).
+    assert score(f"Qualifying: a + b = {t}. Total: {t}", t) == 1.0
+    # A hedged answer naming a wrong total as THE answer must score < 1.
+    assert score(f"The total is {t + 250} (not {t}).", t) < 1.0
+    # wrong answers guaranteed distinct from the truth (t+0 trap removed)
+    for wrong in (t + 1, t * 2 + 7, t + 913, t + 123_456):
         assert score(str(wrong), t) < 1.0
+    assert score("I could not find any qualifying reports.", t) == 0.0
     print("self-checks passed")

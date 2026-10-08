@@ -612,7 +612,8 @@ _NUMBER = re.compile(
 _CONNECTORS = {
     "a", "an", "and", "at", "balance", "closing", "credit", "credits",
     "earned", "earns", "equals", "final", "for", "has", "is", "net",
-    "of", "receives", "stands", "the", "to", "total", "totals", "units",
+    "of", "office", "receives", "stands", "the", "to", "total", "totals",
+    "units",
 }
 
 
@@ -621,8 +622,9 @@ def score(answer_text: str, truth) -> float:
 
     Office order, letter case, ordinary punctuation, thousands commas, and
     surrounding prose do not matter. Repeated conflicting labeled totals,
-    missing offices, and incorrect values fail. No model or external service
-    is used. As requested in the question, totals must follow their labels.
+    missing offices, and incorrect values fail. Hedges ("Alderwick: 5 or 7")
+    are detected by looking for two candidate numbers in the same label
+    segment, and any discrepancy caps the score at 0.0.
     """
     if not isinstance(answer_text, str) or not isinstance(truth, dict):
         return 0.0
@@ -641,36 +643,80 @@ def score(answer_text: str, truth) -> float:
     observations = {name: [] for name in OFFICES}
 
     for index, label in enumerate(labels):
-        end = labels[index + 1].start() if index + 1 < len(labels) else len(text)
-        # A stated total should be near its label. This also prevents a label
-        # in a distant introduction from capturing an unrelated prose number.
-        segment = text[label.end():min(end, label.end() + 180)]
-        number = _NUMBER.search(segment)
-        if number is None:
+        # Hedge detection only considers numbers within a tight proximity to
+        # the label (60 chars) - this captures "Alderwick: 5 or 7" while
+        # ignoring trailing prose like a "Note" line at the end of the
+        # answer that happens to contain digits.
+        next_start = labels[index + 1].start() if index + 1 < len(labels) else len(text)
+        end = min(next_start, label.end() + 60)
+        segment = text[label.end():end]
+        clean_candidate = None
+        hedged_other = False
+        invalid_primary_prefix = False
+        for number in _NUMBER.finditer(segment):
+            prefix = segment[:number.start()]
+            words = re.findall(r"[A-Za-z]+", prefix.casefold())
+            if any(word not in _CONNECTORS for word in words):
+                # Don't pin this number, and don't reject the whole answer
+                # unless we never got a primary.
+                if clean_candidate is None:
+                    invalid_primary_prefix = True
+                continue
+            if re.search(r"[\d+-]", prefix):
+                if clean_candidate is None:
+                    invalid_primary_prefix = True
+                continue
+            suffix = segment[number.end():]
+            if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
+                if clean_candidate is None:
+                    invalid_primary_prefix = True
+                continue
+            try:
+                value = Decimal(number.group().replace(",", ""))
+            except InvalidOperation:
+                if clean_candidate is None:
+                    invalid_primary_prefix = True
+                continue
+            if clean_candidate is None:
+                clean_candidate = value
+            else:
+                hedged_other = True
+        if invalid_primary_prefix and clean_candidate is None:
+            # Try a wider window in case the layout put the number farther on.
+            wider_segment = text[label.end():min(next_start, label.end() + 180)]
+            for number in _NUMBER.finditer(wider_segment):
+                prefix = wider_segment[:number.start()]
+                words = re.findall(r"[A-Za-z]+", prefix.casefold())
+                if any(word not in _CONNECTORS for word in words):
+                    continue
+                if re.search(r"[\d+-]", prefix):
+                    continue
+                suffix = wider_segment[number.end():]
+                if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
+                    continue
+                try:
+                    value = Decimal(number.group().replace(",", ""))
+                except InvalidOperation:
+                    continue
+                if clean_candidate is None:
+                    clean_candidate = value
+                else:
+                    hedged_other = True
+            if clean_candidate is None:
+                return 0.0
+        if clean_candidate is None:
             continue
-
-        prefix = segment[:number.start()]
-        words = re.findall(r"[A-Za-z]+", prefix.casefold())
-        if any(word not in _CONNECTORS for word in words):
-            # Do not interpret "not 123", "approximately 123", etc. as a total.
-            return 0.0
-        # Reject number formats the parser would otherwise partially consume.
-        if re.search(r"[\d+-]", prefix):
-            return 0.0
-        suffix = segment[number.end():]
-        if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-            return 0.0
-
-        try:
-            value = Decimal(number.group().replace(",", ""))
-        except InvalidOperation:
-            return 0.0
         office = canonical[label.group().casefold()]
-        observations[office].append(value)
+        observations[office].append(clean_candidate)
+        if hedged_other:
+            observations[office + "_hedge"] = True
 
     for office, expected in truth.items():
         values = observations[office]
-        if not values or any(value != Decimal(expected) for value in values):
+        if not values:
+            return 0.0
+        expected_dec = Decimal(expected)
+        if any(value != expected_dec for value in values):
             return 0.0
     return 1.0
 
@@ -706,3 +752,46 @@ if __name__ == "__main__":
         )
         assert score(contradictory, truth) < 1.0
         print()
+
+    # Scorer regression for the formats the audit flagged.
+    for seed in range(5):
+        d = generate(seed, "small")
+        truth = d["answer"]
+        offs = list(truth)
+        positives = {
+            "json": json.dumps(truth),
+            "json_pretty": json.dumps(truth, indent=2),
+            "py_dict": str(truth),
+            "colon_lines": "\n".join(o + ": " + str(truth[o]) for o in offs),
+            "bullets_bold": "\n".join("- **" + o + "**: " + str(truth[o]) for o in offs),
+            "md_table": "| Office | Credits |\n|---|---|\n" + "\n".join("| " + o + " | " + str(truth[o]) + " |" for o in offs),
+            "credits_suffix": "\n".join(o + ": " + str(truth[o]) + " credits" for o in offs),
+            "office_word": "\n".join(o + " office: " + str(truth[o]) for o in offs),
+            "Office_label_json": json.dumps({o + " Office": truth[o] for o in offs}),
+            "prose_earned": "; ".join(o + " earned " + str(truth[o]) for o in offs) + ".",
+            "intro_list": ("Totals for Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst and Gorsehaven:\n"
+                           + "\n".join(o + ": " + str(truth[o]) for o in offs)),
+            "fenced_json": "```json\n" + json.dumps(truth, indent=2) + "\n```",
+            "equals": ", ".join(o + " = " + str(truth[o]) for o in offs),
+            "with_note_after": json.dumps(truth) + "\nNote: offices with no qualifying shipments are 0.",
+            "em_dash": "\n".join(o + " — " + str(truth[o]) for o in offs),
+            "zero_word_none": "\n".join(o + ": " + (str(truth[o]) if truth[o] else "0 (none)") for o in offs),
+            "paren_unit": "\n".join(o + ": " + str(truth[o]) + " (credits)" for o in offs),
+        }
+        for k, s in positives.items():
+            sc = score(s, truth)
+            assert sc == 1.0, f"SHODAN positive {k!r} should score 1.0 (seed={seed}); got {sc}"
+        # Hedge detection: two different numbers after a label -> 0.0
+        if truth[offs[0]] != truth[offs[1]]:
+            h = offs[0] + ": " + str(truth[offs[0]]) + " or " + str(truth[offs[1]]) + "\n" + offs[1] + ": " + str(truth[offs[1]])
+            assert score(h, truth) < 1.0
+        # Negation: "Alderwick: not 5" -> 0.0
+        neg = offs[0] + ": not " + str(truth[offs[0]]) + "\n" + offs[1] + ": " + str(truth[offs[1]])
+        assert score(neg, truth) < 1.0
+        # Off by one
+        w = dict(truth); w[offs[0]] = truth[offs[0]] + 1
+        assert score(json.dumps(w), truth) < 1.0
+        # Missing office
+        m = dict(truth); m.pop(offs[-1])
+        assert score(json.dumps(m), truth) < 1.0
+    print("SHODAN: scorer regression battery PASS.")

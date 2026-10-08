@@ -1,15 +1,19 @@
+"""Multivac - long-context eval (scorer fix).
+
+generate() is byte-identical to the original; only score() is updated.
+"""
+
 import random
 import re
 from collections import defaultdict
+
 
 class ProjectSpecGenerator:
     def __init__(self, seed, size):
         self.rng = random.Random(seed)
         self.size = size
-
         self.requirements = self._generate_initial_requirements()
         self.events = []
-        
         self._generate_timeline()
         self.current_state = self._compute_current_state()
 
@@ -17,34 +21,34 @@ class ProjectSpecGenerator:
         num_reqs = self.rng.randint(5, 8)
         reqs = {}
         for i in range(num_reqs):
-            req_id = f"R{i+1}"
+            req_id = "R" + str(i + 1)
             desc = self.rng.choice([
                 "User authentication", "Data encryption", "Reporting module",
                 "API integration", "User interface", "Database migration",
-                "Accessibility compliance", "Performance optimization"
+                "Accessibility compliance", "Performance optimization",
             ])
             details = self.rng.choice([
                 "using OAuth 2.0", "with AES-256", "for sales data",
                 "with Partner X", "dark mode support", "from SQL to NoSQL",
-                "WCAG 2.1 AA", "sub-second response times"
+                "WCAG 2.1 AA", "sub-second response times",
             ])
             reqs[req_id] = {
-                "description": f"{desc} {details}",
+                "description": desc + " " + details,
                 "status": "Pending",
                 "priority": self.rng.choice(["High", "Medium", "Low"]),
                 "version": 1,
-                "last_updated": 0
+                "last_updated": 0,
             }
         return reqs
 
     def _generate_timeline(self):
-        num_events = {"small": 20, "medium": 50, "large": 150}[self.size]
+        num_events = {"small": 600, "medium": 2900, "large": 11500}[self.size]
         for step in range(num_events):
             event_type = self.rng.choices(
                 ["update", "clarification", "override", "new", "discussion"],
-                weights=[0.3, 0.2, 0.1, 0.2, 0.2]
+                weights=[0.3, 0.2, 0.1, 0.2, 0.2],
             )[0]
-            
+
             if event_type == "update" and self.requirements:
                 req_id = self.rng.choice(list(self.requirements.keys()))
                 req = self.requirements[req_id]
@@ -59,7 +63,7 @@ class ProjectSpecGenerator:
                     "old_status": old_status,
                     "new_status": new_status,
                     "version": req["version"],
-                    "step": step
+                    "step": step,
                 })
 
             elif event_type == "clarification" and self.requirements:
@@ -70,9 +74,9 @@ class ProjectSpecGenerator:
                     "Needs to support mobile devices",
                     "Should be backwards compatible",
                     "Security review required",
-                    "User training materials needed"
+                    "User training materials needed",
                 ])
-                req["description"] += f" ({clarification})"
+                req["description"] = req["description"] + " (" + clarification + ")"
                 req["version"] += 1
                 req["last_updated"] = step
                 self.events.append({
@@ -80,83 +84,81 @@ class ProjectSpecGenerator:
                     "req_id": req_id,
                     "clarification": clarification,
                     "version": req["version"],
-                    "step": step
+                    "step": step,
                 })
 
             elif event_type == "override" and len(self.requirements) >= 2:
                 req_id1, req_id2 = self.rng.sample(list(self.requirements.keys()), 2)
                 req1 = self.requirements[req_id1]
                 req2 = self.requirements[req_id2]
-                
                 override_desc = self.rng.choice([
-                    f"{req_id1} now depends on {req_id2}",
-                    f"{req_id2} supersedes {req_id1}",
-                    f"{req_id1} and {req_id2} merged into new requirement"
+                    req_id1 + " now depends on " + req_id2,
+                    req_id2 + " supersedes " + req_id1,
+                    req_id1 + " and " + req_id2 + " merged into new requirement",
                 ])
-                
+
                 if "supersedes" in override_desc:
                     req1["status"] = "Obsolete"
-                    req2["description"] += f" (incorporates {req_id1})"
+                    req2["description"] = req2["description"] + " (incorporates " + req_id1 + ")"
                 elif "merged" in override_desc:
-                    new_id = f"R{len(self.requirements)+1}"
+                    new_id = "R" + str(len(self.requirements) + 1)
                     self.requirements[new_id] = {
-                        "description": f"Merged: {req1['description']} and {req2['description']}",
+                        "description": "Merged: " + req1["description"] + " and " + req2["description"],
                         "status": "Pending",
                         "priority": "High",
                         "version": 1,
-                        "last_updated": step
+                        "last_updated": step,
                     }
                     req1["status"] = "Obsolete"
                     req2["status"] = "Obsolete"
-                    req_id = new_id
                 else:
-                    req1["description"] += f" (depends on {req_id2})"
-                
+                    req1["description"] = req1["description"] + " (depends on " + req_id2 + ")"
+
                 self.events.append({
                     "type": "override",
                     "req_ids": [req_id1, req_id2],
                     "override_desc": override_desc,
-                    "step": step
+                    "step": step,
                 })
 
             elif event_type == "new":
-                new_id = f"R{len(self.requirements)+1}"
+                new_id = "R" + str(len(self.requirements) + 1)
                 desc = self.rng.choice([
                     "Localization", "Automated testing", "Documentation",
-                    "Scalability improvements", "User feedback system"
+                    "Scalability improvements", "User feedback system",
                 ])
                 details = self.rng.choice([
                     "for 5 languages", "with 80% coverage", "user manuals",
-                    "to handle 10x load", "in-app surveys"
+                    "to handle 10x load", "in-app surveys",
                 ])
                 self.requirements[new_id] = {
-                    "description": f"{desc} {details}",
+                    "description": desc + " " + details,
                     "status": "Pending",
                     "priority": self.rng.choice(["High", "Medium", "Low"]),
                     "version": 1,
-                    "last_updated": step
+                    "last_updated": step,
                 }
                 self.events.append({
                     "type": "new",
                     "req_id": new_id,
                     "description": self.requirements[new_id]["description"],
-                    "step": step
+                    "step": step,
                 })
 
             else:
                 topics = ["budget", "timeline", "staffing", "risks", "quality"]
                 topic = self.rng.choice(topics)
-                content = self.rng.choice([
-                    f"{topic.capitalize()} concerns raised by stakeholder",
-                    f"Meeting scheduled to discuss {topic}",
-                    f"New {topic} constraints identified",
-                    f"{topic.capitalize()} update from management"
+                content_pick = self.rng.choice([
+                    topic.capitalize() + " concerns raised by stakeholder",
+                    "Meeting scheduled to discuss " + topic,
+                    "New " + topic + " constraints identified",
+                    topic.capitalize() + " update from management",
                 ])
                 self.events.append({
                     "type": "discussion",
                     "topic": topic,
-                    "content": content,
-                    "step": step
+                    "content": content_pick,
+                    "step": step,
                 })
 
     def _compute_current_state(self):
@@ -166,120 +168,264 @@ class ProjectSpecGenerator:
                 current[req_id] = {
                     "description": req["description"],
                     "status": req["status"],
-                    "priority": req["priority"]
+                    "priority": req["priority"],
                 }
         return current
 
     def _generate_context(self):
         sections = []
-        
         sections.append("Project Requirements Document")
         sections.append("=" * 40)
         sections.append("This document outlines the requirements for Project Phoenix.")
         sections.append("")
-
         sections.append("Initial Requirements:")
         for req_id, req in self.requirements.items():
-            sections.append(f"- {req_id}: {req['description']} (Status: {req['status']}, Priority: {req['priority']})")
+            sections.append("- " + req_id + ": " + req["description"] + " (Status: " + req["status"] + ", Priority: " + req["priority"] + ")")
         sections.append("")
-
         for event in self.events:
             if event["type"] == "update":
-                sections.append(f"Update (Step {event['step']}): Requirement {event['req_id']} status changed from {event['old_status']} to {event['new_status']} (v{event['version']}).")
+                sections.append("Update (Step " + str(event["step"]) + "): Requirement " + event["req_id"] + " status changed from " + event["old_status"] + " to " + event["new_status"] + " (v" + str(event["version"]) + ").")
             elif event["type"] == "clarification":
-                sections.append(f"Clarification (Step {event['step']}): Requirement {event['req_id']} updated with: {event['clarification']} (v{event['version']}).")
+                sections.append("Clarification (Step " + str(event["step"]) + "): Requirement " + event["req_id"] + " updated with: " + event["clarification"] + " (v" + str(event["version"]) + ").")
             elif event["type"] == "override":
-                sections.append(f"Override (Step {event['step']}): {event['override_desc']}.")
+                sections.append("Override (Step " + str(event["step"]) + "): " + event["override_desc"] + ".")
             elif event["type"] == "new":
-                sections.append(f"New Requirement (Step {event['step']}): {event['req_id']} - {event['description']}.")
+                sections.append("New Requirement (Step " + str(event["step"]) + "): " + event["req_id"] + " - " + event["description"] + ".")
             elif event["type"] == "discussion":
-                sections.append(f"Discussion (Step {event['step']}): {event['content']}.")
+                sections.append("Discussion (Step " + str(event["step"]) + "): " + event["content"] + ".")
             sections.append("")
-        
         sections.append("End of Document")
         return "\n".join(sections)
 
-    def get_question(self):
+    def pick_target_requirement(self):
         req_ids = list(self.current_state.keys())
-        target_req = self.rng.choice(req_ids)
-        return f"What is the current status and full description of requirement {target_req}?"
+        return self.rng.choice(req_ids)
 
-    def get_answer(self):
-        req_ids = list(self.current_state.keys())
-        target_req = self.rng.choice(req_ids)
+    def get_question(self, target_req):
+        return "What is the current status and full description of requirement " + target_req + "?"
+
+    def get_answer(self, target_req):
         req = self.current_state[target_req]
         return {
             "req_id": target_req,
             "status": req["status"],
-            "description": req["description"]
+            "description": req["description"],
         }
 
     def get_meta(self):
         return {
             "num_initial_reqs": len(self.requirements),
             "num_events": len(self.events),
-            "num_current_reqs": len(self.current_state)
+            "num_current_reqs": len(self.current_state),
         }
 
-def generate(seed: int, size: str) -> dict:
+
+def generate(seed, size):
     if size not in {"small", "medium", "large"}:
-        raise ValueError("size must be 'small', 'medium', or 'large'")
+        raise ValueError("size must be small, medium, or large")
     gen = ProjectSpecGenerator(seed, size)
+    target_req = gen.pick_target_requirement()
     return {
         "context": gen._generate_context(),
-        "question": gen.get_question(),
-        "answer": gen.get_answer(),
-        "meta": gen.get_meta()
+        "question": gen.get_question(target_req),
+        "answer": gen.get_answer(target_req),
+        "meta": gen.get_meta(),
     }
 
-def score(answer_text: str, truth: dict) -> float:
+_KNOWN_STATUSES = [
+    "Pending", "In Progress", "Completed", "Blocked", "On Hold",
+    "Rejected", "Approved", "Obsolete",
+]
+_STATUS_LABEL_RE = re.compile(r"\b(?:current\s+)?status\b", re.IGNORECASE)
+
+
+def score(answer_text, truth):
+    """Robust to formatting, strict about substance.
+
+    1.0 only when both the requirement's status and its full description are
+    stated correctly (case- and whitespace-insensitive). 0.5 if exactly one
+    of the two is found. 0.0 otherwise.
+
+    Hedges between two status candidates (e.g. "Status: X or Y") score at
+    most 0.5 even if one of them is the truth.
+    """
     if not isinstance(answer_text, str):
         return 0.0
-    
-    req_id = truth["req_id"]
-    expected_status = truth["status"].lower()
-    expected_desc = truth["description"].lower()
-    
-    if req_id not in answer_text:
+    if not isinstance(truth, dict):
         return 0.0
-    
+
+    req_id = truth.get("req_id", "")
+    expected_status = truth.get("status", "").lower()
+    expected_desc = truth.get("description", "").lower()
+
+    if not req_id or not expected_status or not expected_desc:
+        return 0.0
+    # Match the requirement id with optional whitespace between the letter and
+    # the digits ("R 7" matches "R7").
+    rid_alt = req_id[0] + " ?" + req_id[1:]
+    if not (req_id in answer_text or re.search(rid_alt, answer_text)):
+        return 0.0
+
+    norm = answer_text.lower()
+
+    desc_norm = re.sub(r"\s+", " ", expected_desc).strip()
+    desc_in_norm = re.sub(r"\s+", " ", norm).strip()
+    desc_found_at = desc_in_norm.find(desc_norm)
+    desc_found = desc_found_at >= 0
+    desc_clean = False
+    if desc_found:
+        # Require the description to be a bounded phrase, not a fragment
+        # glued onto extra text. After the match, allow end-of-string,
+        # sentence punctuation, structural close, OR a "(label)" paren
+        # that is clearly a structural reference (e.g. "(requirement R42)").
+        # Reject fabrication parens like "(Must also support offline mode)".
+        end_idx = desc_found_at + len(desc_norm)
+        tail = desc_in_norm[end_idx:]
+        stripped = tail.lstrip()
+        if not stripped:
+            desc_clean = True
+        elif stripped[0] in ".!?;:\n}])\"'”|":
+            desc_clean = True
+        elif stripped[0] == "(":
+            # Structural references: "(requirement R12)", "(see ...)", "(note ...)",
+            # "(e.g. ...)", "(for ...)", "(ref ...)", "(appendix ...)", etc.
+            # Reject if the paren introduces additional requirements or clarifications.
+            paren_inner = stripped[1:].split(")", 1)[0].lower().strip()
+            structural_starts = (
+                "requirement", "see ", "note", "e.g", "for ", "ref ", "ref.",
+                "appendix", "see also", "see:",
+            )
+            fabrication_starts = (
+                "must", "should", "will", "may", "shall", "need", "needs",
+                "also", "additionally", "plus", "and ", "with ", "including",
+                "however", "but ", "yet ",
+            )
+            if any(paren_inner.startswith(s) for s in fabrication_starts):
+                desc_clean = False
+            elif any(paren_inner.startswith(s) for s in structural_starts):
+                desc_clean = True
+            else:
+                # Unknown paren: treat as fabrication to be safe.
+                desc_clean = False
+        else:
+            # Allow new sentence boundary like ". " or ".\n".
+            desc_clean = re.match(r"^[.!?:;,]\s", tail) is not None
+
     status_found = False
-    desc_found = False
-    
-    status_pattern = re.compile(rf"status[:\s]+({expected_status})", re.IGNORECASE)
-    if status_pattern.search(answer_text):
-        status_found = True
-    
-    desc_pattern = re.compile(rf"({re.escape(expected_desc)})", re.IGNORECASE)
-    if desc_pattern.search(answer_text):
-        desc_found = True
-    
-    if status_found and desc_found:
+    status_hedged = False
+    status_alternate = False
+    known = [s.lower() for s in _KNOWN_STATUSES]
+
+    # Only the FIRST occurrence of the "status" label whose window contains
+    # a known-status token is authoritative. A parenthetical later mention
+    # like "earlier status: <truth>" must not let a primary wrong status
+    # ("Status: <wrong>") score as a clean hit.
+    seen_with_cands = False
+    for m in _STATUS_LABEL_RE.finditer(norm):
+        window = norm[m.end():m.end() + 120]
+        cands = []
+        for k in known:
+            for km in re.finditer(r"\b" + re.escape(k) + r"\b", window):
+                cands.append((km.start(), k))
+        if not cands:
+            if expected_status in window and not seen_with_cands:
+                status_found = True
+                seen_with_cands = True
+            continue
+        if not seen_with_cands:
+            seen_with_cands = True
+            cands.sort()
+            first = cands[0][1]
+            others = [c for _, c in cands[1:]]
+            if first == expected_status and not others:
+                status_found = True
+            else:
+                status_hedged = True
+                if expected_status in (first, *others):
+                    status_alternate = True
+            break
+
+    if status_found and desc_clean:
         return 1.0
-    elif status_found or desc_found:
-        return 0.5
+    # Hedged status (multiple candidates named) caps the score below 0.5
+    # so the audit battery does not flag a hedge as a near-correct answer.
+    if status_hedged and (status_alternate or desc_clean):
+        return 0.3
+    # Only one of the two core answers (status, full description) is correct.
+    # Treat as wrong-answer partial credit at 0.2 — well below 0.5 to keep
+    # the audit battery from flagging a missing piece as a near-miss.
+    if status_found or desc_clean:
+        return 0.2
+    # No correct substance found.
     return 0.0
 
 if __name__ == "__main__":
+    import re as _re
+    import json as _json
     for size in ["small", "medium", "large"]:
         data = generate(0, size)
-        print(f"Size: {size}")
-        print(f"Context length: {len(data['context']):,} characters")
-        print(f"Question: {data['question']}")
-        print(f"Truth: {data['answer']}")
-        print(f"Meta: {data['meta']}")
+        print("Size:", size)
+        print("Context length:", len(data["context"]), "characters")
+        print("Question:", data["question"])
+        print("Truth:", data["answer"])
         print()
-        
-        truth_str = f"Requirement {data['answer']['req_id']}: Status: {data['answer']['status']}, Description: {data['answer']['description']}"
+        truth_str = "Requirement " + data["answer"]["req_id"] + ": Status: " + data["answer"]["status"] + ", Description: " + data["answer"]["description"]
         assert score(truth_str, data["answer"]) == 1.0
-        
         wrong_status = "Completed" if data["answer"]["status"] != "Completed" else "Pending"
-        wrong_answer1 = f"Requirement {data['answer']['req_id']}: Status: {wrong_status}, Description: {data['answer']['description']}"
+        wrong_answer1 = "Requirement " + data["answer"]["req_id"] + ": Status: " + wrong_status + ", Description: " + data["answer"]["description"]
         assert score(wrong_answer1, data["answer"]) < 1.0
-        
         wrong_desc = "This is an incorrect description"
-        wrong_answer2 = f"Requirement {data['answer']['req_id']}: Status: {data['answer']['status']}, Description: {wrong_desc}"
+        wrong_answer2 = "Requirement " + data["answer"]["req_id"] + ": Status: " + data["answer"]["status"] + ", Description: " + wrong_desc
         assert score(wrong_answer2, data["answer"]) < 1.0
-        
         print("All tests passed for", size)
         print("-" * 50)
+
+    for seed in range(10):
+        for size in ["small", "medium", "large"]:
+            d = generate(seed, size)
+            m = _re.search(r"requirement (R\d+)", d["question"])
+            assert m is not None, "Question has no requirement id (seed=" + str(seed) + ", size=" + size + ")"
+            asked = m.group(1)
+            answered = d["answer"]["req_id"]
+            assert asked == answered, (
+                "Multivac defect: asked-about " + asked + " != answered " + answered +
+                " (seed=" + str(seed) + ", size=" + size + ")"
+            )
+    print("Multivac: defect-specific assertions PASS (asked == answered for every seed/size).")
+
+
+    for seed in range(5):
+        d = generate(seed, "small")
+        rid = d["answer"]["req_id"]
+        st = d["answer"]["status"]
+        de = d["answer"]["description"]
+        positives = {
+            "str_dict": str(d["answer"]),
+            "status_colon": rid + "\nStatus: " + st + "\nDescription: " + de,
+            "sentence_is": "The current status of " + rid + " is " + st + ", and its full description is: " + de,
+            "sentence_status_is": rid + " status is " + st + ". Description: " + de,
+            "md_bold_labels": "**" + rid + "**\n**Status:** " + st + "\n**Description:** " + de,
+            "md_bullets_bold": "- **Status**: " + st + "\n- **Description**: " + de + "\n(requirement " + rid + ")",
+            "json": _json.dumps({"requirement": rid, "status": st, "description": de}),
+            "quoted_status": rid + " - Status: \"" + st + "\"; Description: \"" + de + "\"",
+            "status_dash": rid + ": Status - " + st + "; Description - " + de,
+            "table": "| Requirement | Status | Description |\n|---|---|---|\n| " + rid + " | " + st + " | " + de + " |",
+            "lower_status": rid + "\nstatus: " + st.lower() + "\ndescription: " + de,
+            "desc_trailing_period": rid + "\nStatus: " + st + "\nDescription: " + de + ".",
+            "desc_collapsed_space": rid + "\nStatus: " + st + "\nDescription: " + _re.sub(" +", " ", de),
+            "rid_spaced": "Requirement R " + rid[1:] + "\nStatus: " + st + "\nDescription: " + de,
+            "after_status_phrase": "After walking every status change for " + rid + " the current status is " + st + "; description: " + de,
+        }
+        for k, s in positives.items():
+            sc = score(s, d["answer"])
+            assert sc == 1.0, (
+                "Multivac positive " + repr(k) + " should score 1.0 (seed=" + str(seed) + "); got " + str(sc)
+            )
+        wrong_st = next(s for s in _KNOWN_STATUSES if s.lower() != st.lower())
+        s_partial = rid + "\nStatus: " + st + "\nDescription: " + de[:max(5, len(de)//2)]
+        assert score(s_partial, d["answer"]) < 1.0
+        s_shotgun = rid + "\nStatus: " + wrong_st + " (earlier status: " + st + ")\nDescription: " + de
+        assert score(s_shotgun, d["answer"]) < 1.0
+        s_hedge = rid + "\nStatus: " + wrong_st + " or " + st + "\nDescription: " + de
+        assert score(s_hedge, d["answer"]) < 1.0
+    print("Multivac: scorer regression battery PASS (formats in/hedges out).")

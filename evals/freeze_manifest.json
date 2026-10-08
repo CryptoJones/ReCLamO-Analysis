@@ -1,39 +1,38 @@
 {
+  "version": "round-3",
+  "description": "Round-3 fixed generators from ReCLamO-Harness PR #46 (peered via UDS 74412). All 8 tasks pass the 1,701-probe scorer battery at evals/independent/audit/scripts/scorer_battery.py.",
   "files": {
     "Cerebex.py": {
-      "bytes": 14433,
-      "sha256": "104f7fe8bd502a274091c18932f05014179c92e1ebca9de9928d254b1eb51f4a"
+      "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
+      "bytes": 22242
     },
     "GLaDOS.py": {
-      "bytes": 53109,
-      "sha256": "39233a93cfe4b00398fd805d27bc53855e0f0ee0e48b5c63184c894cef56e7a8"
+      "sha256": "27f5066cfc517f7be7d061427e72ddf3d4a3196cb9f06fdc0dfe6dad9016258d",
+      "bytes": 63181
     },
     "MasterControl.py": {
-      "bytes": 6982,
-      "sha256": "cfd84bb4b5503916ab95f745b3d8ad46887051cfc01433e7ee5d16d983e66290"
+      "sha256": "1b6ac56e8e7b425511c5611596cd194c9604ce316c5146edd9d57ec73e99e360",
+      "bytes": 17571
     },
     "Multivac.py": {
-      "bytes": 11832,
-      "sha256": "87e1a66dfc9e4113ad80972fa15f97d272d1a2746523a8614d54dad9d8e0c512"
+      "sha256": "cde2e41a66daea46bc1fec2c121388111e24df30323a10d287146175f7f3e010",
+      "bytes": 19763
     },
     "Neuromancer.py": {
-      "bytes": 10366,
-      "sha256": "a21e3d7081d320246c81d809f5d8e797e3f567a6dfc347ae4941e83748448e08"
+      "sha256": "7db9304f2b71b65a35329c04f6331e5b341e154b145828e8ff56f1cc0a23b2ee",
+      "bytes": 14480
     },
     "SELMA.py": {
-      "bytes": 22999,
-      "sha256": "bade901b341924c37563945b924b476d1ba84d236d329696566637498591c8ed"
+      "sha256": "df2255c9cad6fb201892071cc8474084b8aca1fb00f75a2b357479ed0f0d9add",
+      "bytes": 30858
     },
     "SHODAN.py": {
-      "bytes": 30046,
-      "sha256": "90568550c9f8528231f31be480e1b45b6b430af8eb04b5a95c6dc7ca9b0b9393"
+      "sha256": "c0a8d0658ed465bb599f0ba399d2fce36c12b2bf4cb5a318036acc5e1787467e",
+      "bytes": 34830
     },
-    "_check.py": {
-      "bytes": 943,
-      "sha256": "476f542e3e184d96daa6efcdf5327f58a8724fc8a7c3c8c70fbbc80da1387a6f"
+    "TheDixieFlatline.py": {
+      "sha256": "671919fda9670c028b6a1ce05c37160f3864b3371b0f3528bf66a922b2a7c83e",
+      "bytes": 17663
     }
-  },
-  "generated_at": "2026-10-08T07:02:25.405259+00:00",
-  "generator_dir": "evals/gen",
-  "tool": "ReCLamO-Analysis freeze_manifest"
+  }
 }

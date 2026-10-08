@@ -4,8 +4,13 @@ __pycache__/
 *.pyo
 
 # Eval results (generated; per-cell, not source)
-evals/results.*.jsonl
+evals/results/*.jsonl
+evals/results/*.partial.jsonl
+evals/results*.jsonl
 evals/results.jsonl
+
+# Build artifacts
+/target/
 
 # Local-only check helper
 evals/gen/_check.py
