@@ -95,6 +95,13 @@ impl Provider for OpenAICompatProvider {
             message: format!("JSON parse: {e}; head: {}", truncate(&raw)),
         })?;
 
+        if let Some(err) = parsed.error {
+            return Err(ReclamoError::Provider {
+                provider: "openai-compat".into(),
+                message: format!("upstream error: {}", err.message),
+            });
+        }
+
         let choice = parsed.choices.into_iter().next().ok_or_else(|| ReclamoError::Provider {
             provider: "openai-compat".into(),
             message: "no choice in response".into(),
@@ -106,7 +113,7 @@ impl Provider for OpenAICompatProvider {
         })?;
 
         let raw_text = msg.content.unwrap_or_default();
-        let mut reasoning = msg.reasoning_content;
+        let mut reasoning = msg.reasoning_content.or(msg.reasoning);
         let mut tool_calls: Vec<ToolCall> = Vec::new();
 
         for tc in msg.tool_calls.unwrap_or_default() {
@@ -209,10 +216,21 @@ fn wire_role(r: Role) -> &'static str {
 
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
+    /// Error envelope (OpenRouter, vLLM, etc.) — surfaces 503/429 with a
+    /// `{"error": {"message": "..."}}` body instead of a 200 + `choices: []`.
+    #[serde(default)]
+    error: Option<WireError>,
     #[serde(default)]
     choices: Vec<ChatChoice>,
     #[serde(default)]
     usage: Option<ChatUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireError {
+    message: String,
+    #[serde(default)]
+    code: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,6 +248,10 @@ struct ChatMessage {
     /// reasoning here.
     #[serde(default, rename = "reasoning_content")]
     reasoning_content: Option<String>,
+    /// Non-standard: OpenRouter's NVIDIA Nemotron echoes a top-level
+    /// `reasoning` string on the assistant message.
+    #[serde(default)]
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<WireToolCall>>,
 }

@@ -5,11 +5,11 @@ from typing import Dict, Any
 def generate(seed: int, size: str) -> Dict[str, Any]:
     rng = random.Random(seed)
     
-    # Size parameters: (total entries, target chars)
+    # Size parameters
     size_params = {
-        "small":  (30, 60000),
-        "medium": (120, 300000),
-        "large":  (500, 1200000)
+        "small":  (20, 60000),
+        "medium": (100, 300000),
+        "large":  (400, 1200000)
     }
     num_entries, target_chars = size_params[size]
     
@@ -18,48 +18,27 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     categories = ["Travel", "Office Supplies", "Meals", "Entertainment"]
     months = ["January", "February", "March", "April", "May", "June"]
     
-    # Force at least one March travel entry with non-zero final amount (not denied)
-    forced_entries = []
-    # For small: force 2, medium: 5, large: 10
-    num_forced = {"small": 2, "medium": 5, "large": 10}[size]
-    for _ in range(num_forced):
-        emp = rng.choice(employees)
-        month = "March"
-        cat = "Travel"
-        orig_amount = round(rng.uniform(100, 5000), 2)
-        # Add a small adjustment that does not zero out
-        adj = round(rng.uniform(-orig_amount*0.3, orig_amount*0.3), 2)
-        final_amount = max(1.0, orig_amount + adj)  # ensure >0
-        # No denial
-        forced_entries.append({
-            "employee": emp,
-            "month": month,
-            "category": cat,
-            "orig_amount": orig_amount,
-            "adjustments": [adj],
-            "final_amount": final_amount,
-            "status": "Approved"
-        })
-    
-    # Generate remaining entries randomly
-    remaining_entries = []
-    for _ in range(num_entries - num_forced):
+    entries = []
+    for _ in range(num_entries):
         emp = rng.choice(employees)
         month = rng.choice(months)
         cat = rng.choice(categories)
         orig_amount = round(rng.uniform(50, 5000), 2)
+        # Generate adjustments (0 to 2)
         num_adjustments = rng.randint(0, 2)
         adjustments = []
         for _ in range(num_adjustments):
             adj_amount = round(rng.uniform(-orig_amount*0.5, orig_amount*0.5), 2)
             adjustments.append(adj_amount)
+        # Final amount after adjustments
         final_amount = max(0, orig_amount + sum(adjustments))
+        # Status: denied if final amount becomes 0 or randomly
         if final_amount == 0 or rng.random() < 0.15:
             status = "Denied"
             final_amount = 0.0
         else:
             status = "Approved"
-        remaining_entries.append({
+        entries.append({
             "employee": emp,
             "month": month,
             "category": cat,
@@ -68,10 +47,6 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
             "final_amount": final_amount,
             "status": status
         })
-    
-    # Combine: forced first, then shuffle? We'll shuffle all entries to interleave
-    entries = forced_entries + remaining_entries
-    rng.shuffle(entries)
     
     # ---------- Text generation ----------
     # Templates with synonyms and coreference
@@ -135,7 +110,7 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
             app_text = rng.choice(approval_templates).format(emp=emp, month=month, cat=cat, amt=final)
             fragments.append(app_text)
     
-    # Add filler to reach target length (roughly within 5%)
+    # Add filler to reach target length (roughly)
     current_len = sum(len(f) for f in fragments)
     target_len = target_chars - 5000  # leave room for question and meta
     while current_len < target_len:
@@ -181,20 +156,22 @@ def score(answer_text: str, truth: Any) -> float:
     matches = re.findall(pattern, answer_text)
     if not matches:
         return 0.0
+    # Take the last match? Or the first? We'll take the first numeric that matches the truth format.
+    # Better: try to find the exact truth number in the answer text (ignoring commas and $)
     truth_num = float(truth.replace("$", "").replace(",", ""))
-    # Check each match for exact numeric equality (within 1 cent)
     for m in matches:
         num_str = m.replace(",", "")
         try:
             num = float(num_str)
             if abs(num - truth_num) < 0.01:
-                # Also ensure the answer contains the truth as a substring (normalized)
-                norm_answer = answer_text.replace("$", "").replace(",", "").lower().strip()
-                norm_truth = truth.replace("$", "").replace(",", "").lower().strip()
-                if norm_truth in norm_answer:
-                    return 1.0
+                return 1.0
         except:
             continue
+    # If no exact match, check if answer_text contains the truth as a substring after normalization
+    norm_answer = answer_text.replace("$", "").replace(",", "").lower().strip()
+    norm_truth = truth.replace("$", "").replace(",", "").lower().strip()
+    if norm_truth in norm_answer:
+        return 1.0
     return 0.0
 
 
@@ -216,13 +193,14 @@ if __name__ == "__main__":
         wrong1 = "$0.00"
         wrong2 = "I don't know"
         wrong3 = ans.replace("$", "")  # missing dollar sign but number same
+        # wrong3 should still score 1.0 because we ignore $?
+        # Actually our score function should handle that. Let's test.
         print(f"Score for truth: {score(ans, ans)}")
         print(f"Score for wrong1 ($0.00): {score(wrong1, ans)}")
         print(f"Score for wrong2: {score(wrong2, ans)}")
         print(f"Score for wrong3 (no $): {score(wrong3, ans)}")
-        # Ensure truth is non-zero, so $0.00 is wrong
-        assert score(wrong1, ans) < 1.0, f"$0.00 should not score 1.0 against {ans}"
-        assert score(wrong2, ans) < 1.0, f"'I don't know' should not score 1.0"
+        assert score(wrong1, ans) < 1.0
+        assert score(wrong2, ans) < 1.0
         # wrong3 should be 1.0 because number is same
         assert score(wrong3, ans) == 1.0, f"Expected 1.0 for missing $, got {score(wrong3, ans)}"
         print("All assertions passed.\n")

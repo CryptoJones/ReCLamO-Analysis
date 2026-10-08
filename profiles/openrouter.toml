@@ -1,0 +1,50 @@
+# OpenRouter (https://openrouter.ai) via the OpenAI-compat endpoint.
+#
+# Run:
+#   cargo run --example eval -- \
+#     --provider openai-compat --model "$MODEL" --profile profiles/openrouter.toml \
+#     --tasks Cerebex,MasterControl,Multivac,Neuromancer,SELMA \
+#     --sizes small,medium --seeds 0,1 \
+#     --out evals/results.openrouter.jsonl
+#
+# Key source: `pass openrouter/opencode` (first line, $10 cap on
+# OpenRouter's side, ≈$0.001 used). Loaded at runtime via api_key_cmd
+# so the key never touches the conversation, the log, or the JSONL
+# rows. Do NOT use the openrouter/agent/* keys — those belong to the
+# Buzz fleet lanes. If you need more than $10 of headroom, ask CJ
+# rather than switching keys.
+#
+# Model examples (set $MODEL in the launching shell, or pass --model):
+#   nvidia/nemotron-nano-9b-v2:free            — 128K ctx, reasoning
+#   inclusionai/ling-3.1-flash:free            — 262K ctx
+#   openai/gpt-oss-20b:free                    — 131K ctx (OpenAI open-weight)
+
+name = "openrouter"
+provider = "openai-compat"
+model = "nvidia/nemotron-3-ultra-550b-a55b:free"
+max_context = 256_000
+resident_kv = 192_000      # leave headroom for the prompt template
+subcall_chars = 8_000
+temperature = 0.7
+top_p = 0.95
+
+# OpenAI-compat base.
+base_url = "https://openrouter.ai/api/v1"
+
+# Read the key at runtime. `pass` is GPG-locked, so this only runs when
+# the eval actually fires; nothing enters the conversation, the log,
+# or the row output. The sh -c wrapper lets us trim + pick the first
+# line; `head -1` is the conservative read for a key entry.
+api_key_cmd = "pass openrouter/opencode | head -1"
+
+[loop_config]
+max_iterations = 20
+max_timeout_secs = 600
+subcall_timeout_secs = 90
+max_errors = 3
+max_subcalls_per_run = 64
+max_subcalls_per_exec = 24
+root_max_output_tokens = 4096
+subcall_max_output_tokens = 2048
+route_by_size = true
+plain_query_margin = 2_000
