@@ -96,6 +96,18 @@ pub async fn run(
     // commit, successful final, or successful final_var.
     #[allow(unused_assignments)]
     let mut consecutive_uncommitted_finalvar: u32 = 0;
+    // Number of consecutive erroring REPL execs across the whole run.
+    // Was previously declared inside the turn loop, which silently
+    // reset the counter every turn — a model that errors once per
+    // turn (`repl.execute()` returns `error.is_some()` on every call)
+    // never tripped the cap, because each turn's counter started at
+    // 0. Mirror of ReCLamO-Harness #50 (PR #52) which has the same
+    // shape. The fix: declare outside the loop, drop the within-turn
+    // reset on a successful exec. The counter now accumulates across
+    // turns and trips `forced_finish:max_errors` at the Nth
+    // consecutive erroring exec. Test:
+    // `max_errors_counts_across_turns_not_just_within`.
+    let mut consecutive_errors: u32 = 0;
     while turn < cfg.max_iterations {
         turn += 1;
         if Instant::now() >= deadline {
@@ -275,7 +287,6 @@ pub async fn run(
         }
 
         let mut made_progress = false;
-        let mut consecutive_errors = 0u32;
         // Run only the FIRST code block when a reply contains several.
         // The Python harness's ReCLamO-Harness fix #4 (PR #52) keeps
         // `parsed.code_blocks[:1]`; without this, a model that emits
@@ -323,7 +334,14 @@ pub async fn run(
                     return forced_finish(repl.as_mut(), profile.provider.as_ref(), &messages, "max_errors", &mut stats, started, deadline).await;
                 }
             } else {
-                consecutive_errors = 0;
+                // Successful exec — leave the across-turn counter alone.
+                // It is reset implicitly by the next error hitting
+                // `cfg.max_errors` (the loop exits via forced_finish), or
+                // implicitly at the bottom of a clean run. We deliberately
+                // do NOT reset it on a successful exec: that is the bug
+                // #8 fixes (a model that errors once per turn never
+                // tripped the cap because every turn's counter started
+                // at 0).
                 // A successful commit clears the uncommitted-final_var
                 // streak: the model did exactly what we asked (e.g.
                 // `answer = 42`) and the next FINAL_VAR(answer) is no
@@ -851,6 +869,65 @@ mod tests {
         assert_eq!(
             res.stop_reason, "forced_finish:max_timeout",
             "a slow provider.complete must trip the root-call timeout, not burn the full max_iterations"
+        );
+        assert_eq!(res.answer, "");
+    }
+
+    #[tokio::test]
+    async fn max_errors_counts_across_turns_not_just_within() {
+        // #8: the `consecutive_errors` counter used to be declared
+        // inside the turn loop and reset to 0 on every successful
+        // exec within the same turn. A model that errors *once per
+        // turn* (the worst-case failure mode: every turn produces
+        // exactly one erroring exec, then the turn ends) would never
+        // trip the cap, because each turn's counter started at 0.
+        // The fix: declare the counter outside the loop and never
+        // reset on a successful exec — it now accumulates across the
+        // whole run, mirroring ReCLamO-Harness #50 (PR #52).
+        //
+        // Script: three turns, each emits `1/0` (Python
+        // ZeroDivisionError, so the real SubprocessRepl returns
+        // `error.is_some()`). With the default `max_errors=3` and
+        // `max_iterations=20`, the third erroring exec trips
+        // `forced_finish:max_errors`. (We don't need a successful
+        // exec anywhere — every turn errors, so the counter goes
+        // 1 -> 2 -> 3 -> trip.)
+        use crate::completion::{completion, RouteMode};
+        let scripted = vec![
+            Completion {
+                content: "```repl\n1/0\n```".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+            Completion {
+                content: "```repl\n1/0\n```".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+            Completion {
+                content: "```repl\n1/0\n```".into(),
+                reasoning: None,
+                tool_calls: vec![],
+                stop_reason: "stop".into(),
+                usage: Usage { input_tokens: Some(1), output_tokens: Some(1), total_tokens: Some(2) },
+            },
+        ];
+        let profile = make_profile(scripted);
+        let mut opts = CompletionOpts::default();
+        opts.route_mode = RouteMode::Harness;
+        let res = completion("tiny context".into(), "q".into(), profile, opts)
+            .await
+            .expect("forced_finish on max_errors must still return Ok so the eval rig scores it as 0.0");
+        assert_eq!(res.mode, "harness:fence");
+        assert_eq!(
+            res.stop_reason, "forced_finish:max_errors",
+            "after 3 consecutive erroring execs across 3 turns, the counter must trip — \
+             this is the bug #8 fixes: previously the counter reset every turn and the \
+             cap was unreachable for a model that errors once per turn."
         );
         assert_eq!(res.answer, "");
     }
