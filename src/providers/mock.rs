@@ -15,9 +15,15 @@ use std::sync::{Arc, Mutex};
 /// Boxed scripted completion.
 pub type Scripted = std::sync::Arc<dyn Fn(&[Message]) -> Completion + Send + Sync>;
 
+/// Boxed async scripted completion (used to model slow/hung providers
+/// for the `max_timeout` tests — a sync closure can't `await`).
+pub type AsyncScripted =
+    std::sync::Arc<dyn Fn(&[Message]) -> futures::future::BoxFuture<'static, Completion> + Send + Sync>;
+
 enum Script {
     Sequential(Vec<Completion>),
     Function(Scripted),
+    AsyncFunction(AsyncScripted),
 }
 
 pub struct MockProvider {
@@ -42,6 +48,19 @@ impl MockProvider {
         Self {
             model: model.into(),
             inner: Mutex::new(Script::Function(f)),
+            caps: CapabilitySet::openai_compat(),
+        }
+    }
+
+    /// Build a mock that delegates each call to an async function.
+    /// Needed for tests that simulate a slow/hung provider so the
+    /// `max_timeout` deadline can actually trip the root call (#7).
+    /// The sync `function` builder can't `await`, so the timeout
+    /// tests use this.
+    pub fn function_async(model: impl Into<String>, f: AsyncScripted) -> Self {
+        Self {
+            model: model.into(),
+            inner: Mutex::new(Script::AsyncFunction(f)),
             caps: CapabilitySet::openai_compat(),
         }
     }
@@ -82,18 +101,41 @@ impl Provider for MockProvider {
         _tools: Option<&[serde_json::Value]>,
         _opts: CompleteOpts,
     ) -> ReclamoResult<Completion> {
-        let mut g = self.inner.lock().map_err(|e| ReclamoError::Provider {
-            provider: "mock".into(),
-            message: format!("mutex poisoned: {e}"),
-        })?;
-        match &mut *g {
-            Script::Sequential(v) => {
-                if v.is_empty() {
-                    return Err(ReclamoError::Provider { provider: "mock".into(), message: "exhausted".into() });
+        // Take the script choice out of the mutex before any await.
+        // `MutexGuard` is `!Send` and `complete` is async; holding the
+        // guard across an `await` (e.g. the AsyncFunction branch)
+        // would fail to compile.
+        enum Choice {
+            Seq(Completion),
+            Fn(Scripted),
+            AsyncFn(AsyncScripted),
+            Exhausted,
+        }
+        let choice = {
+            let mut g = self.inner.lock().map_err(|e| ReclamoError::Provider {
+                provider: "mock".into(),
+                message: format!("mutex poisoned: {e}"),
+            })?;
+            match &mut *g {
+                Script::Sequential(v) => {
+                    if v.is_empty() {
+                        Choice::Exhausted
+                    } else {
+                        Choice::Seq(v.remove(0))
+                    }
                 }
-                Ok(v.remove(0))
+                Script::Function(f) => Choice::Fn(f.clone()),
+                Script::AsyncFunction(f) => Choice::AsyncFn(f.clone()),
             }
-            Script::Function(f) => Ok(f(messages)),
+        };
+        match choice {
+            Choice::Seq(c) => Ok(c),
+            Choice::Fn(f) => Ok(f(messages)),
+            Choice::AsyncFn(f) => Ok(f(messages).await),
+            Choice::Exhausted => Err(ReclamoError::Provider {
+                provider: "mock".into(),
+                message: "exhausted".into(),
+            }),
         }
     }
 }

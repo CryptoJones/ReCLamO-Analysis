@@ -51,6 +51,10 @@ pub struct CompletionOpts {
     pub max_subcalls_per_run: Option<u32>,
     /// Override `LoopConfig::max_subcalls_per_exec`.
     pub max_subcalls_per_exec: Option<u32>,
+    /// Override `LoopConfig::max_timeout`. Tests use this to bound
+    /// the loop without waiting 600s of real wallclock; production
+    /// code leaves it at the default 600s. (#7)
+    pub max_timeout: Option<std::time::Duration>,
     /// `Some("docker")` to wrap the REPL in a `--network none` container.
     pub sandbox: Option<String>,
     /// JSONL trajectory output directory.
