@@ -262,8 +262,10 @@ def score(answer_text, truth):
         return 0.0
     # Match the requirement id with optional whitespace between the letter and
     # the digits ("R 7" matches "R7").
-    rid_alt = req_id[0] + " ?" + req_id[1:]
-    if not (req_id in answer_text or re.search(rid_alt, answer_text)):
+    # Round 3.1 (#63): bounded on both sides, so truth "R14" is not matched
+    # by an answer about "R142" (or "R7" by "R70").
+    rid_alt = r"(?<![A-Za-z0-9])" + re.escape(req_id[0]) + " ?" + re.escape(req_id[1:]) + r"(?![0-9])"
+    if not re.search(rid_alt, answer_text):
         return 0.0
 
     norm = answer_text.lower()
@@ -281,8 +283,23 @@ def score(answer_text, truth):
         # Reject fabrication parens like "(Must also support offline mode)".
         end_idx = desc_found_at + len(desc_norm)
         tail = desc_in_norm[end_idx:]
-        stripped = tail.lstrip()
-        if not stripped:
+        # Markdown emphasis/code closers right after the description
+        # ("**<desc>** — Status: ...") are formatting, not content.
+        stripped = re.sub(r"^[*_`]+", "", tail.lstrip()).lstrip()
+        # Round 3.1 (#63): the description may be followed by another field
+        # of the same answer -- "<desc> — Status: X", "<desc>\n- **Current
+        # Status:** X", "<desc> | Priority: Low" -- with an optional dash,
+        # bar or bullet separator. Only a field LABEL qualifies, so "<desc> —
+        # must also support mobile" stays a fabrication.
+        field_after = re.match(
+            r"^(?:[-–—|•·]\s*)?[*_`]*"
+            r"(?:current\s+)?(?:status|priority|state)\b[*_`]*\s*[*_`]*"
+            r"(?::|=|-|–|—|\bis\b|\bwas\b)",
+            stripped,
+        )
+        if field_after:
+            desc_clean = True
+        elif not stripped:
             desc_clean = True
         elif stripped[0] in ".!?;:\n}])\"'”|":
             desc_clean = True
@@ -291,9 +308,13 @@ def score(answer_text, truth):
             # "(e.g. ...)", "(for ...)", "(ref ...)", "(appendix ...)", etc.
             # Reject if the paren introduces additional requirements or clarifications.
             paren_inner = stripped[1:].split(")", 1)[0].lower().strip()
+            paren_inner = re.sub(r"^[*_`]+", "", paren_inner)
             structural_starts = (
                 "requirement", "see ", "note", "e.g", "for ", "ref ", "ref.",
                 "appendix", "see also", "see:",
+                # Round 3.1 (#63): "<desc> (Status: X)" carries a field of
+                # the answer, not extra description content.
+                "status", "current status", "priority",
             )
             fabrication_starts = (
                 "must", "should", "will", "may", "shall", "need", "needs",
@@ -336,7 +357,12 @@ def score(answer_text, truth):
             seen_with_cands = True
             cands.sort()
             first = cands[0][1]
-            others = [c for _, c in cands[1:]]
+            # Round 3.1 (#63): a paragraph break ends the status field. A
+            # later paragraph's history ("The status was originally set to
+            # Pending ...") is not a second candidate; a hedge on the same
+            # line or in the same paragraph still is.
+            cut = window.find("\n\n", cands[0][0])
+            others = [c for p, c in cands[1:] if cut < 0 or p < cut]
             if first == expected_status and not others:
                 status_found = True
             else:
