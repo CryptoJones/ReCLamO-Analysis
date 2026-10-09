@@ -1,6 +1,6 @@
 {
-  "version": "round-3",
-  "description": "Round-3 fixed generators from ReCLamO-Harness PR #46 (peered via UDS 74412). All 8 tasks pass the 1,701-probe scorer battery at evals/independent/audit/scripts/scorer_battery.py.",
+  "version": "round-3.1",
+  "description": "Round-3.1 pinned generators from ReCLamO-Harness PR #64 (commit d816814). All 8 tasks pass the 2,111-probe scorer battery at evals/independent/audit/scripts/scorer_battery.py. Multivac.py is the only file that changed vs round-3; the generate() function is byte-identical for every size x seeds 0-9 (scorer-only change).",
   "files": {
     "Cerebex.py": {
       "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
@@ -15,8 +15,8 @@
       "bytes": 17571
     },
     "Multivac.py": {
-      "sha256": "cde2e41a66daea46bc1fec2c121388111e24df30323a10d287146175f7f3e010",
-      "bytes": 19763
+      "sha256": "bc174de961ff9688ff499a42abbf16c57e444c0e10e4c1accb63912eebe2ef4c",
+      "bytes": 21353
     },
     "Neuromancer.py": {
       "sha256": "7db9304f2b71b65a35329c04f6331e5b341e154b145828e8ff56f1cc0a23b2ee",
@@ -34,5 +34,6 @@
       "sha256": "671919fda9670c028b6a1ce05c37160f3864b3371b0f3528bf66a922b2a7c83e",
       "bytes": 17663
     }
-  }
+  },
+  "round3_1_note": "Multivac.py score() now accepts a field label (Status/Priority/State) after the description, optionally behind a dash/bar/bullet or inside '(Status: ...)'; the status window ends at a paragraph break (later history is not a hedge); and the requirement id is matched whole (R14 no longer matches R142). 0.2 -> 1.0 on a correct 'R142: <desc> — Status: Pending' answer. Port of ReCLamO-Harness PR #64, commit d816814."
 }
