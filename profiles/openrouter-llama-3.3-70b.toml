@@ -1,0 +1,46 @@
+# OpenRouter — meta-llama/llama-3.3-70b-instruct (DeepInfra backend, 131K cap)
+#
+# Run:
+#   cargo run --release --example eval -- \
+#     --provider openai-compat --model meta-llama/llama-3.3-70b-instruct --profile profiles/openrouter-llama-3.3-70b.toml \
+#     --tasks Cerebex,MasterControl,Multivac,Neuromancer,SELMA \
+#     --sizes small,medium --seeds 2,3 \
+#     --mode both --out evals/results.<...>.jsonl
+#
+# Key source: `pass openrouter/opencode` (first line, $10 cap on
+# OpenRouter's side). Loaded at runtime via api_key_cmd so the key
+# never touches the conversation, the log, or the JSONL rows.
+
+name = "openrouter-llama-3.3-70b"
+provider = "openai-compat"
+model = "meta-llama/llama-3.3-70b-instruct"
+max_context = 131_072
+# 80K router budget forces harness path on medium (300K-char context
+# has est_tokens ~86K > 80K) so we exercise both paths even on cells
+# where the model could absorb the context.
+resident_kv = 80_000
+subcall_chars = 8_000
+temperature = 0.7
+top_p = 0.95
+
+# Disable native reasoning — matches the Phase 7a/b profile.
+extra_body = { reasoning = { enabled = false } }
+
+# OpenAI-compat base.
+base_url = "https://openrouter.ai/api/v1"
+
+# Read the key at runtime. `pass` is GPG-locked; nothing enters the
+# conversation, the log, or the row output.
+api_key_cmd = "pass openrouter/opencode | head -1"
+
+[loop_config]
+max_iterations = 20
+max_timeout_secs = 600
+subcall_timeout_secs = 90
+max_errors = 3
+max_subcalls_per_run = 64
+max_subcalls_per_exec = 24
+root_max_output_tokens = 4096
+subcall_max_output_tokens = 2048
+route_by_size = true
+plain_query_margin = 2_000
