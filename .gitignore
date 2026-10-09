@@ -8,6 +8,7 @@ evals/results/*.jsonl
 evals/results/*.partial.jsonl
 evals/results*.jsonl
 evals/results.jsonl
+evals/results/*.log
 
 # Build artifacts
 /target/

@@ -1,0 +1,263 @@
+================================================================================
+Phase 7 rerun — round-3.1 scorer, fresh seeds 2 + 3, all 8 tasks
+v0.2 commit: 139a0c5
+Models: meta-llama/llama-3.3-70b-instruct (DeepInfra), google/gemini-2.5-flash-lite
+128 cells total (8 tasks × 2 sizes × 2 seeds × 2 modes × 2 models)
+Profile: profiles/openrouter-{llama-3.3-70b,gemini-2.5-flash-lite}.toml, resident_kv=80K, thinking=adaptive
+Scorer: evals/gen/Multivac.py round-3.1 (sha bc174de9…, manifest round-3.1)
+================================================================================
+
+================================================================================
+LLAMA 3.3 70B (meta-llama/llama-3.3-70b-instruct)
+================================================================================
+  total cells: 64
+  plain   mean: 0.250  (n=32)
+  harness mean: 0.113  (n=32)
+
+  task           size   mode       s2    s3  mean
+  Cerebex        medium harness  0.00  0.00  0.00
+  Cerebex        medium plain    0.00  0.00  0.00
+  Cerebex        small  harness  0.00  0.00  0.00
+  Cerebex        small  plain    0.00  0.00  0.00
+  GLaDOS         medium harness  0.00  0.00  0.00
+  GLaDOS         medium plain    0.00  0.00  0.00
+  GLaDOS         small  harness  0.20  0.00  0.10
+  GLaDOS         small  plain    0.20  0.20  0.20
+  MasterControl  medium harness  0.00  0.00  0.00
+  MasterControl  medium plain    0.30  0.30  0.30
+  MasterControl  small  harness  0.00  0.40  0.20
+  MasterControl  small  plain    0.40  0.30  0.35
+  Multivac       medium harness  0.00  1.00  0.50
+  Multivac       medium plain    1.00  1.00  1.00
+  Multivac       small  harness  0.00  1.00  0.50
+  Multivac       small  plain    1.00  1.00  1.00
+  Neuromancer    medium harness  0.00  0.00  0.00
+  Neuromancer    medium plain    0.00  0.00  0.00
+  Neuromancer    small  harness  0.00  0.00  0.00
+  Neuromancer    small  plain    1.00  0.00  0.50
+  SELMA          medium harness  0.00  1.00  0.50
+  SELMA          medium plain    0.00  0.00  0.00
+  SELMA          small  harness  0.00  0.00  0.00
+  SELMA          small  plain    1.00  0.30  0.65
+  SHODAN         medium harness  0.00  0.00  0.00
+  SHODAN         medium plain    0.00  0.00  0.00
+  SHODAN         small  harness  0.00  0.00  0.00
+  SHODAN         small  plain    0.00  0.00  0.00
+  TheDixieFlatline medium harness  0.00  0.00  0.00
+  TheDixieFlatline medium plain    0.00  0.00  0.00
+  TheDixieFlatline small  harness  0.00  0.00  0.00
+  TheDixieFlatline small  plain    0.00  0.00  0.00
+
+  -- per-cell detail --
+  Cerebex        medium seed=2 harness | score=0.00 mode_actual=harness:fence turns=10 sub= 2 stop=forced_finish:max_errors         tokens=132687 secs= 95.4
+  Cerebex        medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 80328 secs= 25.9
+  Cerebex        medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 0 stop=final_var                        tokens=  7047 secs= 13.6
+  Cerebex        medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 80471 secs= 23.1
+  Cerebex        small  seed=2 harness | score=0.00 mode_actual=harness:fence turns=13 sub= 8 stop=final_var                        tokens= 67110 secs=148.5
+  Cerebex        small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16301 secs=  3.4
+  Cerebex        small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 8 sub= 3 stop=final_var                        tokens= 35101 secs=107.8
+  Cerebex        small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16244 secs=  1.3
+  GLaDOS         medium seed=2 harness | score=0.00 mode_actual=harness:fence turns=11 sub= 3 stop=forced_finish:max_errors         tokens= 43944 secs= 84.2
+  GLaDOS         medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=does_not_fit                     tokens=     0 secs=  0.0
+  GLaDOS         medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 6 sub= 1 stop=forced_finish:max_errors         tokens= 22398 secs= 48.0
+  GLaDOS         medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=does_not_fit                     tokens=     0 secs=  0.0
+  GLaDOS         small  seed=2 harness | score=0.20 mode_actual=harness:fence turns=10 sub= 4 stop=final_var                        tokens= 54718 secs= 63.4
+  GLaDOS         small  seed=2 plain   | score=0.20 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 23801 secs=  9.7
+  GLaDOS         small  seed=3 harness | score=0.00 mode_actual=harness:fence turns=10 sub= 7 stop=final_var                        tokens= 61989 secs=349.5
+  GLaDOS         small  seed=3 plain   | score=0.20 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 23798 secs= 23.2
+  MasterControl  medium seed=2 harness | score=0.00 mode_actual=harness:fence turns=26 sub= 2 stop=final_var                        tokens=256616 secs=282.6
+  MasterControl  medium seed=2 plain   | score=0.30 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 64200 secs= 32.0
+  MasterControl  medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2378 secs= 13.5
+  MasterControl  medium seed=3 plain   | score=0.30 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 64278 secs= 14.1
+  MasterControl  small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 7 sub= 2 stop=final_var                        tokens= 49029 secs=441.8
+  MasterControl  small  seed=2 plain   | score=0.40 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 13227 secs=  1.7
+  MasterControl  small  seed=3 harness | score=0.40 mode_actual=harness:fence turns=13 sub= 7 stop=forced_finish:max_errors         tokens= 94810 secs=198.0
+  MasterControl  small  seed=3 plain   | score=0.30 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 13387 secs=  7.9
+  Multivac       medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 5 sub= 1 stop=final_var                        tokens= 11484 secs= 53.9
+  Multivac       medium seed=2 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 72874 secs= 22.4
+  Multivac       medium seed=3 harness | score=1.00 mode_actual=harness:fence turns= 3 sub= 0 stop=final_var                        tokens=  6103 secs= 12.1
+  Multivac       medium seed=3 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 73486 secs= 23.7
+  Multivac       small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 4 sub= 1 stop=final_var                        tokens= 12941 secs= 15.1
+  Multivac       small  seed=2 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 14845 secs=  3.5
+  Multivac       small  seed=3 harness | score=1.00 mode_actual=harness:fence turns= 3 sub= 0 stop=final_var                        tokens=  6125 secs= 12.7
+  Multivac       small  seed=3 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 14947 secs=  5.7
+  Neuromancer    medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 4 sub= 0 stop=forced_finish:max_timeout        tokens= 13647 secs=1682.6
+  Neuromancer    medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 75045 secs= 41.6
+  Neuromancer    medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2417 secs= 17.6
+  Neuromancer    medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 75365 secs= 43.6
+  Neuromancer    small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 4 sub= 1 stop=final_var                        tokens=  9321 secs= 35.2
+  Neuromancer    small  seed=2 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 14221 secs= 11.1
+  Neuromancer    small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 5 sub= 2 stop=final_var                        tokens= 13913 secs= 49.9
+  Neuromancer    small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 14249 secs=  4.9
+  SELMA          medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 0 stop=final_var                        tokens=  7651 secs= 11.7
+  SELMA          medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 75965 secs= 21.0
+  SELMA          medium seed=3 harness | score=1.00 mode_actual=harness:fence turns= 6 sub= 1 stop=forced_finish:max_errors         tokens=101634 secs= 76.7
+  SELMA          medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 76399 secs= 27.3
+  SELMA          small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 6 sub= 1 stop=forced_finish:max_errors         tokens= 31729 secs= 20.9
+  SELMA          small  seed=2 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 15302 secs=  4.5
+  SELMA          small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 7 sub= 1 stop=final_var                        tokens= 22254 secs= 56.9
+  SELMA          small  seed=3 plain   | score=0.30 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 15452 secs=  5.4
+  SHODAN         medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 1 stop=forced_finish:max_errors         tokens= 77793 secs=363.3
+  SHODAN         medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 58315 secs= 19.3
+  SHODAN         medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2386 secs= 44.5
+  SHODAN         medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 58490 secs= 34.0
+  SHODAN         small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 7 sub= 4 stop=final_var                        tokens= 28297 secs=212.7
+  SHODAN         small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 11706 secs=  3.1
+  SHODAN         small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2174 secs= 11.0
+  SHODAN         small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 11767 secs=  5.7
+  TheDixieFlatline medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 5 sub= 1 stop=final_var                        tokens= 14843 secs= 15.2
+  TheDixieFlatline medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 75621 secs= 26.8
+  TheDixieFlatline medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2014 secs=  5.3
+  TheDixieFlatline medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 75041 secs= 24.5
+  TheDixieFlatline small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 8 sub= 2 stop=forced_finish:max_errors         tokens= 50008 secs= 37.4
+  TheDixieFlatline small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 17722 secs=  3.8
+  TheDixieFlatline small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 1 stop=final_var                        tokens=  6555 secs= 13.0
+  TheDixieFlatline small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 17894 secs=  4.0
+
+================================================================================
+GEMINI 2.5 FLASH LITE (google/gemini-2.5-flash-lite)
+================================================================================
+  total cells: 64
+  plain   mean: 0.263  (n=32)
+  harness mean: 0.019  (n=32)
+
+  task           size   mode       s2    s3  mean
+  Cerebex        medium harness  0.00  0.00  0.00
+  Cerebex        medium plain    0.00  0.00  0.00
+  Cerebex        small  harness  0.00  0.00  0.00
+  Cerebex        small  plain    0.00  0.00  0.00
+  GLaDOS         medium harness  0.00  0.20  0.10
+  GLaDOS         medium plain    0.20  0.20  0.20
+  GLaDOS         small  harness  0.00  0.00  0.00
+  GLaDOS         small  plain    0.20  0.20  0.20
+  MasterControl  medium harness  0.00  0.00  0.00
+  MasterControl  medium plain    0.40  0.40  0.40
+  MasterControl  small  harness  0.00  0.40  0.20
+  MasterControl  small  plain    0.40  0.40  0.40
+  Multivac       medium harness  0.00  0.00  0.00
+  Multivac       medium plain    1.00  1.00  1.00
+  Multivac       small  harness  0.00  0.00  0.00
+  Multivac       small  plain    1.00  1.00  1.00
+  Neuromancer    medium harness  0.00  0.00  0.00
+  Neuromancer    medium plain    0.00  0.00  0.00
+  Neuromancer    small  harness  0.00  0.00  0.00
+  Neuromancer    small  plain    0.00  0.00  0.00
+  SELMA          medium harness  0.00  0.00  0.00
+  SELMA          medium plain    0.00  1.00  0.50
+  SELMA          small  harness  0.00  0.00  0.00
+  SELMA          small  plain    0.00  1.00  0.50
+  SHODAN         medium harness  0.00  0.00  0.00
+  SHODAN         medium plain    0.00  0.00  0.00
+  SHODAN         small  harness  0.00  0.00  0.00
+  SHODAN         small  plain    0.00  0.00  0.00
+  TheDixieFlatline medium harness  0.00  0.00  0.00
+  TheDixieFlatline medium plain    0.00  0.00  0.00
+  TheDixieFlatline small  harness  0.00  0.00  0.00
+  TheDixieFlatline small  plain    0.00  0.00  0.00
+
+  -- per-cell detail --
+  Cerebex        medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  4607 secs=  3.5
+  Cerebex        medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 83024 secs=  2.7
+  Cerebex        medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 8 sub= 4 stop=forced_finish:max_errors         tokens=225320 secs=168.1
+  Cerebex        medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 83429 secs=  2.6
+  Cerebex        small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 1 stop=final_var                        tokens=  9524 secs= 18.0
+  Cerebex        small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16766 secs=  1.8
+  Cerebex        small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 7 sub= 0 stop=forced_finish:final_var_uncommitted tokens=110581 secs= 49.0
+  Cerebex        small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16883 secs=  1.1
+  GLaDOS         medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  7706 secs= 12.8
+  GLaDOS         medium seed=2 plain   | score=0.20 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens=178344 secs=  5.1
+  GLaDOS         medium seed=3 harness | score=0.20 mode_actual=harness:fence turns=24 sub= 3 stop=forced_finish:final_var_uncommitted tokens=807359 secs=181.5
+  GLaDOS         medium seed=3 plain   | score=0.20 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens=178010 secs=  6.5
+  GLaDOS         small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 7 sub= 0 stop=final_var                        tokens= 57818 secs= 65.5
+  GLaDOS         small  seed=2 plain   | score=0.20 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 31848 secs=  4.1
+  GLaDOS         small  seed=3 harness | score=0.00 mode_actual=harness:fence turns=20 sub= 8 stop=final_var                        tokens=197369 secs= 68.5
+  GLaDOS         small  seed=3 plain   | score=0.20 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 30526 secs=  1.8
+  MasterControl  medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  5148 secs=  6.6
+  MasterControl  medium seed=2 plain   | score=0.40 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 66978 secs=  2.2
+  MasterControl  medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 1 stop=final_var                        tokens= 10642 secs=  6.7
+  MasterControl  medium seed=3 plain   | score=0.40 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 67055 secs=  2.7
+  MasterControl  small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2541 secs=  2.8
+  MasterControl  small  seed=2 plain   | score=0.40 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 13984 secs=  1.6
+  MasterControl  small  seed=3 harness | score=0.40 mode_actual=harness:fence turns= 4 sub= 0 stop=forced_finish:max_errors         tokens= 30404 secs=  9.8
+  MasterControl  small  seed=3 plain   | score=0.40 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 14067 secs=  1.2
+  Multivac       medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  1799 secs=  1.0
+  Multivac       medium seed=2 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 88883 secs=  2.7
+  Multivac       medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 4 sub= 2 stop=final_var                        tokens= 14413 secs=  5.8
+  Multivac       medium seed=3 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 89234 secs=  2.1
+  Multivac       small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  3951 secs=  2.0
+  Multivac       small  seed=2 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 17573 secs=  1.1
+  Multivac       small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  5158 secs=  5.6
+  Multivac       small  seed=3 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 17570 secs=  1.0
+  Neuromancer    medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  3134 secs=  5.1
+  Neuromancer    medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 79457 secs=  2.2
+  Neuromancer    medium seed=3 harness | score=0.00 mode_actual=harness:fence turns=30 sub= 5 stop=forced_finish:max_iterations     tokens=1010630 secs=153.8
+  Neuromancer    medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 79473 secs=  2.2
+  Neuromancer    small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  4378 secs=  3.0
+  Neuromancer    small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 15018 secs=  0.9
+  Neuromancer    small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2481 secs=  2.8
+  Neuromancer    small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16502 secs=  4.2
+  SELMA          medium seed=2 harness | score=0.00 mode_actual=harness:fence turns=30 sub= 0 stop=forced_finish:max_iterations     tokens=529703 secs= 67.1
+  SELMA          medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 84147 secs=  2.2
+  SELMA          medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2630 secs=  3.4
+  SELMA          medium seed=3 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 84606 secs=  4.8
+  SELMA          small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  5832 secs=  9.7
+  SELMA          small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16879 secs=  1.0
+  SELMA          small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 2 sub= 0 stop=final_var                        tokens=  5330 secs=  4.2
+  SELMA          small  seed=3 plain   | score=1.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 16979 secs=  1.0
+  SHODAN         medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 9 sub= 0 stop=forced_finish:max_errors         tokens=108966 secs= 20.4
+  SHODAN         medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 60157 secs=  2.6
+  SHODAN         medium seed=3 harness | score=0.00 mode_actual=harness:fence turns=15 sub= 6 stop=final_var                        tokens=175649 secs=199.3
+  SHODAN         medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 60135 secs=  2.7
+  SHODAN         small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 0 stop=final_var                        tokens= 11512 secs= 17.1
+  SHODAN         small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 12002 secs=  1.0
+  SHODAN         small  seed=3 harness | score=0.00 mode_actual=harness:fence turns=30 sub= 0 stop=final_var                        tokens=592302 secs=180.4
+  SHODAN         small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 12032 secs=  1.7
+  TheDixieFlatline medium seed=2 harness | score=0.00 mode_actual=harness:fence turns= 6 sub= 2 stop=final_var                        tokens= 29283 secs= 27.5
+  TheDixieFlatline medium seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens=100606 secs=  2.5
+  TheDixieFlatline medium seed=3 harness | score=0.00 mode_actual=harness:fence turns= 7 sub= 3 stop=final_var                        tokens= 36613 secs= 19.5
+  TheDixieFlatline medium seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 99880 secs=  3.1
+  TheDixieFlatline small  seed=2 harness | score=0.00 mode_actual=harness:fence turns= 1 sub= 0 stop=final_var                        tokens=  2830 secs=  4.6
+  TheDixieFlatline small  seed=2 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 23467 secs=  1.6
+  TheDixieFlatline small  seed=3 harness | score=0.00 mode_actual=harness:fence turns= 3 sub= 0 stop=final_var                        tokens=  9549 secs=  9.7
+  TheDixieFlatline small  seed=3 plain   | score=0.00 mode_actual=plain         turns= 0 sub= 0 stop=stop                             tokens= 23662 secs=  1.2
+
+================================================================================
+COMBINED (both models, n=128)
+================================================================================
+  total cells: 128
+  plain   mean: 0.256  (n=64)
+  harness mean: 0.066  (n=64)
+
+  task           size   mode       s2    s3  mean   n
+  Cerebex        medium harness  0.00  0.00  0.00   4
+  Cerebex        medium plain    0.00  0.00  0.00   4
+  Cerebex        small  harness  0.00  0.00  0.00   4
+  Cerebex        small  plain    0.00  0.00  0.00   4
+  GLaDOS         medium harness  0.00  0.00  0.05   4
+  GLaDOS         medium plain    0.00  0.00  0.10   4
+  GLaDOS         small  harness  0.00  0.00  0.05   4
+  GLaDOS         small  plain    0.20  0.20  0.20   4
+  MasterControl  medium harness  0.00  0.00  0.00   4
+  MasterControl  medium plain    0.30  0.30  0.35   4
+  MasterControl  small  harness  0.00  0.00  0.20   4
+  MasterControl  small  plain    0.30  0.40  0.38   4
+  Multivac       medium harness  0.00  0.00  0.25   4
+  Multivac       medium plain    1.00  1.00  1.00   4
+  Multivac       small  harness  0.00  0.00  0.25   4
+  Multivac       small  plain    1.00  1.00  1.00   4
+  Neuromancer    medium harness  0.00  0.00  0.00   4
+  Neuromancer    medium plain    0.00  0.00  0.00   4
+  Neuromancer    small  harness  0.00  0.00  0.00   4
+  Neuromancer    small  plain    0.00  0.00  0.25   4
+  SELMA          medium harness  0.00  0.00  0.25   4
+  SELMA          medium plain    0.00  0.00  0.25   4
+  SELMA          small  harness  0.00  0.00  0.00   4
+  SELMA          small  plain    0.00  0.30  0.57   4
+  SHODAN         medium harness  0.00  0.00  0.00   4
+  SHODAN         medium plain    0.00  0.00  0.00   4
+  SHODAN         small  harness  0.00  0.00  0.00   4
+  SHODAN         small  plain    0.00  0.00  0.00   4
+  TheDixieFlatline medium harness  0.00  0.00  0.00   4
+  TheDixieFlatline medium plain    0.00  0.00  0.00   4
+  TheDixieFlatline small  harness  0.00  0.00  0.00   4
+  TheDixieFlatline small  plain    0.00  0.00  0.00   4
