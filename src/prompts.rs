@@ -111,9 +111,18 @@ fn thousands_sep(n: u64) -> String {
 /// Sends:
 /// - The original query.
 /// - The current turn index (`Turn i/N`).
-/// - The first-turn "inspect the context first" safeguard.
+/// - The first-turn "inspect the context first" safeguard, plus the v0.2
+///   followup per-call + context-size prompt pattern
+///   (peer-aligned with ReCLamO-Harness `build_user_message` at 9ac890d).
 /// - Late nudges at 60 % and 85 % of `max_iterations`.
 /// - A regex-futility nudge if `regex_futility_turns` ≥ N.
+///
+/// `context_chars` is the number of chars in the user's `context`. When
+/// `context_chars <= subcall_chars`, the init message appends "the whole
+/// `context` fits in a single call" and the per-context "you have not used
+/// a single sub-call yet" nudge is suppressed for the rest of the run
+/// (decomposing the context is not the right move when one sub-call
+/// already sees it all).
 #[allow(clippy::too_many_arguments)]
 pub fn build_user_message(
     query: &str,
@@ -124,16 +133,34 @@ pub fn build_user_message(
     has_partial_answer: bool,
     regex_futility_turns: u32,
     sandbox_kind: &str,
+    context_chars: usize,
+    subcall_chars: u32,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     if turn == 1 {
-        parts.push(format!(
+        let subcall_fmt = thousands_sep(subcall_chars as u64);
+        let context_fmt = thousands_sep(context_chars as u64);
+        // v0.2 followup: print both the per-call char budget and the
+        // context size, then tell the model not to over-decompose.
+        let mut s = format!(
             "Question:\n{query}\n\n\
              Turn 1/{max_iterations}: First, inspect `context`. \n\
              Then form a plan and begin working. After each useful intermediate result, \n\
-             call `commit(text)` to update `answer['content']`."
-        ));
+             call `commit(text)` to update `answer['content']`.\n\n\
+             Each call can read about {subcall_fmt} characters, so don't be afraid to put a lot of context into one call. \
+             Analyze your data and see if it is sufficient to just fit it in a few sub-LLM calls."
+        );
+        if context_chars as u64 <= subcall_chars as u64 {
+            // Whole context fits in one sub-call — say so explicitly. The
+            // model is supposed to *consider* using one call, not auto-do
+            // it, so the rest of the prompt (orchestrator addendum) still
+            // encourages a plan first.
+            s.push_str(&format!(
+                " The whole `context` ({context_fmt} characters) fits in a single call."
+            ));
+        }
+        parts.push(s);
     } else {
         parts.push(format!("Question:\n{query}"));
         parts.push(format!(
@@ -165,6 +192,7 @@ pub fn build_user_message(
         }
     }
 
+    let context_fits = context_chars as u64 <= subcall_chars as u64;
     if regex_futility_turns >= 3 {
         parts.push(format!(
             "You have run regex for {regex_futility_turns} turns without a useful match. \n\
@@ -172,7 +200,10 @@ pub fn build_user_message(
              `context`, or build an event table with the `extract_event_table` helper, then \n\
              apply corrections in code."
         ));
-    } else if max_subcalls_used == 0 && turn >= 4 {
+    } else if max_subcalls_used == 0 && turn >= 4 && !context_fits {
+        // v0.2 followup: suppress the "no sub-call yet" nudge when the
+        // context already fits in one sub-call — the right answer is to
+        // *not* decompose, not to be nagged into decomposing.
         parts.push(
             "You have not used a single sub-call yet. If the data is large enough that\n\
              line-by-line work would be slow, ask a small LLM to classify or summarize one\n\
@@ -224,41 +255,90 @@ mod tests {
 
     #[test]
     fn user_message_first_turn_says_inspect() {
-        let m = build_user_message("find the bug", 1, 20, 0, 64, false, 0, "");
+        let m = build_user_message("find the bug", 1, 20, 0, 64, false, 0, "", 60_000, 20_000);
         assert!(m.contains("Turn 1/20"));
         assert!(m.contains("inspect"));
     }
 
     #[test]
     fn user_message_late_nudge_at_85_percent() {
-        let m = build_user_message("q", 17, 20, 0, 64, true, 0, "");
+        let m = build_user_message("q", 17, 20, 0, 64, true, 0, "", 60_000, 20_000);
         assert!(m.contains("85 %"));
         assert!(m.contains("FINAL_VAR(answer)"));
     }
 
     #[test]
     fn user_message_nudges_after_fruitless_regex() {
-        let m = build_user_message("q", 5, 20, 0, 64, true, 4, "");
+        let m = build_user_message("q", 5, 20, 0, 64, true, 4, "", 60_000, 20_000);
         assert!(m.contains("regex for 4 turns"));
         assert!(m.contains("extract_event_table"));
     }
 
     #[test]
     fn user_message_prompts_delegation_when_zero_subcalls_at_turn_4() {
-        let m = build_user_message("q", 4, 20, 0, 64, false, 0, "");
+        // 60,000-char context does not fit in 20,000-char sub-calls →
+        // "no sub-call yet" nudge is appropriate.
+        let m = build_user_message("q", 4, 20, 0, 64, false, 0, "", 60_000, 20_000);
         assert!(m.contains("not used a single sub-call"));
     }
 
     #[test]
     fn user_message_silenced_when_delegation_already_used() {
-        let m = build_user_message("q", 4, 20, 5, 64, false, 0, "");
+        let m = build_user_message("q", 4, 20, 5, 64, false, 0, "", 60_000, 20_000);
         assert!(!m.contains("not used a single sub-call"));
     }
 
     #[test]
     fn user_message_warns_docker() {
-        let m = build_user_message("q", 2, 20, 0, 64, false, 0, "docker");
+        let m = build_user_message("q", 2, 20, 0, 64, false, 0, "docker", 60_000, 20_000);
         assert!(m.contains("network none"));
+    }
+
+    // --- v0.2 followup tests: per-call size + "fits in one call" pattern ---
+
+    fn args() -> (usize, u32) {
+        (60_000, 20_000)
+    }
+
+    #[test]
+    fn user_message_init_prints_per_call_chars() {
+        // v0.2 followup: turn 1 must state the per-call char budget so the
+        // model can size its sub-calls. (Peer-aligned with the
+        // "Each call can read about N characters" pattern.)
+        let (context_chars, subcall_chars) = args();
+        let m = build_user_message("q", 1, 30, 0, 256, false, 0, "", context_chars, subcall_chars);
+        assert!(m.contains("Each call can read about 20,000 characters"));
+        assert!(m.contains("don't be afraid to put a lot of context into one call"));
+    }
+
+    #[test]
+    fn user_message_init_appends_fits_in_one_call_when_context_fits() {
+        // context 8,000 chars, subcall budget 20,000 → fits.
+        let m = build_user_message("q", 1, 30, 0, 256, false, 0, "", 8_000, 20_000);
+        assert!(m.contains("The whole `context` (8,000 characters) fits in a single call"));
+    }
+
+    #[test]
+    fn user_message_init_omits_fits_note_when_context_oversize() {
+        // context 60,000 chars, subcall budget 20,000 → does NOT fit.
+        let m = build_user_message("q", 1, 30, 0, 256, false, 0, "", 60_000, 20_000);
+        assert!(!m.contains("fits in a single call"));
+    }
+
+    #[test]
+    fn user_message_no_subcall_nudge_suppressed_when_context_fits() {
+        // v0.2 followup: a model that has not used a sub-call by turn 4
+        // should NOT be nagged when the context already fits in one call.
+        // That would push it to decompose a context it can already see.
+        let m = build_user_message("q", 4, 30, 0, 256, false, 0, "", 8_000, 20_000);
+        assert!(!m.contains("not used a single sub-call"));
+    }
+
+    #[test]
+    fn user_message_no_subcall_nudge_fires_when_context_oversize() {
+        // Same shape, but context does not fit → nudge fires as before.
+        let m = build_user_message("q", 4, 30, 0, 256, false, 0, "", 60_000, 20_000);
+        assert!(m.contains("not used a single sub-call"));
     }
 
     #[test]

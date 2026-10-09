@@ -38,6 +38,16 @@ That message had no code and no final answer. \
 Reply with exactly one ```repl code block (or ```python), \
 or `FINAL(...)` / `FINAL_VAR(...)`.";
 
+/// v0.2 followup: appended when the upstream reports `finish_reason =
+/// "length"` (root reply cut off by the per-request `max_tokens` cap).
+/// Peer-aligned with ReCLamO-Harness `CONTINUE_PROMPT` at 9ac890d. The
+/// peer port does a `join` of the partial reply + a continuation; this
+/// port pushes a single breadcrumb and lets the loop continue. Both
+/// approaches are valid — the peer explicitly OK'd the breadcrumb
+/// approach as an alternative.
+const LENGTH_STOP_REASON_BREADCRUMB: &str = "\
+Your last reply was cut off by the output limit. Continue it from where you left off.";
+
 pub async fn run(
     context: String,
     query: String,
@@ -134,6 +144,8 @@ pub async fn run(
                 has_answer,
                 stats.regex_futility,
                 &repl_kind(),
+                context.chars().count(),
+                profile.subcall_chars,
             );
             messages.push(Message::user(nudge));
             last_user_turn_nudge = true;
@@ -201,6 +213,17 @@ pub async fn run(
         assistant.reasoning = completion.reasoning.clone();
         assistant.tool_calls = completion.tool_calls.clone();
         messages.push(assistant);
+
+        // v0.2 followup: if the upstream cut off the reply mid-content
+        // (`finish_reason: "length"`), push a continue-from-here breadcrumb
+        // before the FINAL/code check. If the cut-off reply DID contain a
+        // usable FINAL, the next branch short-circuits and returns; the
+        // breadcrumb just sits in `messages` harmlessly. If the cut-off
+        // reply was mid-code or mid-prose, the breadcrumb steers the
+        // model back on track instead of letting it loop.
+        if completion.stop_reason == "length" {
+            messages.push(Message::user(LENGTH_STOP_REASON_BREADCRUMB));
+        }
 
         // Resolve a FINAL/FINAL_VAR first, if present and not rejected.
         if let (Some(intent), None) = (parsed.final_intent.as_ref(), parsed.reject_reason.as_ref()) {
@@ -966,6 +989,94 @@ mod tests {
         assert!(NO_CODE_NO_FINAL_NUDGE.contains("```python"));
         assert!(NO_CODE_NO_FINAL_NUDGE.contains("FINAL"));
         assert!(NO_CODE_NO_FINAL_NUDGE.contains("FINAL_VAR"));
+    }
+
+    #[test]
+    fn length_stop_reason_breadcrumb_mentions_continue() {
+        // v0.2 followup: the breadcrumb pushed when the upstream reports
+        // `finish_reason: "length"` must steer the model back to the
+        // cut-off point. Peer-aligned with ReCLamO-Harness
+        // `CONTINUE_PROMPT` at 9ac890d. The peer's port does a
+        // continuation + join; this port pushes a single breadcrumb —
+        // both approaches are valid.
+        assert!(LENGTH_STOP_REASON_BREADCRUMB.contains("cut off"));
+        assert!(LENGTH_STOP_REASON_BREADCRUMB.contains("Continue"));
+    }
+
+    #[test]
+    fn loop_pushes_length_breadcrumb_on_truncation() {
+        // v0.2 followup: drive a mock that returns stop_reason="length"
+        // with a truncated reply, and assert the breadcrumb lands in
+        // `messages` so the next turn sees the nudge. Uses the
+        // InMemoryRepl path so no Python is required.
+        use crate::providers::MockProvider;
+        use std::sync::Arc;
+
+        // Turn 1: commit progress (no FINAL). Turn 2: cut off mid-
+        // content (length). The loop pushes the breadcrumb, then
+        // continues. Turn 3: assign `answer = 42` (code only). Turn
+        // 4: `FINAL_VAR(answer)` (final only). The FINAL must be on a
+        // separate turn from the assignment because the loop
+        // short-circuits on a FINAL before running code.
+        let provider = Arc::new(MockProvider::scripted(
+            "mock",
+            vec![
+                Completion {
+                    content: "```repl\ncommit('first')\n```".into(),
+                    reasoning: None,
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: crate::providers::Usage::default(),
+                },
+                Completion {
+                    content: "I was about to write the next chunk but".into(),
+                    reasoning: None,
+                    tool_calls: vec![],
+                    stop_reason: "length".into(),
+                    usage: crate::providers::Usage::default(),
+                },
+                Completion {
+                    content: "```repl\nanswer = 42\n```".into(),
+                    reasoning: None,
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: crate::providers::Usage::default(),
+                },
+                Completion {
+                    content: "FINAL_VAR(answer)".into(),
+                    reasoning: None,
+                    tool_calls: vec![],
+                    stop_reason: "stop".into(),
+                    usage: crate::providers::Usage::default(),
+                },
+            ],
+        )) as Arc<dyn crate::providers::Provider>;
+        let mut profile = ModelProfile::new("t", provider, 32_000);
+        profile.subcall_chars = 20_000;
+
+        let cfg = LoopConfig {
+            max_iterations: 5,
+            max_timeout: std::time::Duration::from_secs(30),
+            max_tokens: None,
+            subcall_timeout: std::time::Duration::from_secs(5),
+            max_errors: 3,
+            max_subcalls_per_run: 64,
+            max_subcalls_per_exec: 24,
+            root_max_output_tokens: 4_096,
+            subcall_max_output_tokens: 2_048,
+            route_by_size: true,
+            plain_query_margin: 2_000,
+        };
+        let res = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(crate::rlm::run(
+                "ctx".to_string(),
+                "q".to_string(),
+                profile,
+                cfg,
+            ))
+            .expect("run ok");
+        assert_eq!(res.answer, "42");
     }
 
     #[test]

@@ -33,9 +33,12 @@ pub struct Profile {
     /// Resident KV (defaults to `max_context`).
     #[serde(default)]
     pub resident_kv: Option<u64>,
-    /// Suggested char budget per sub-call.
-    #[serde(default = "default_subcall_chars")]
-    pub subcall_chars: u32,
+    /// Suggested char budget per sub-call. `None` → derive from
+    /// [`Profile::effective_subcall_chars`] (peer-aligned with
+    /// ReCLamO-Harness `RLMConfig.effective_subcall_chars`, v0.2 followup).
+    /// v0.1 profiles that pinned an explicit value still win.
+    #[serde(default)]
+    pub subcall_chars: Option<u32>,
     /// Sampling temperature.
     #[serde(default = "default_temperature")]
     pub temperature: f64,
@@ -64,9 +67,6 @@ pub struct Profile {
     pub loop_config: LoopConfigToml,
 }
 
-fn default_subcall_chars() -> u32 {
-    20_000
-}
 fn default_temperature() -> f64 {
     0.7
 }
@@ -101,8 +101,12 @@ pub struct LoopConfigToml {
     #[serde(default = "default_max_subcalls_per_exec")]
     pub max_subcalls_per_exec: u32,
     /// Per-role max output tokens: root vs sub-call.
-    #[serde(default = "default_root_max_output")]
-    pub root_max_output_tokens: u32,
+    /// `root_max_output_tokens: None` → derive from
+    /// [`Profile::effective_root_max_output_tokens`]: 8,192 with
+    /// `thinking = enabled`, 4,096 otherwise (v0.2 followup, peer-aligned).
+    /// An explicit value wins.
+    #[serde(default)]
+    pub root_max_output_tokens: Option<u32>,
     #[serde(default = "default_subcall_max_output")]
     pub subcall_max_output_tokens: u32,
     /// Use plain-fallback when context fits (NEXT-STEPS fix #1).
@@ -116,26 +120,27 @@ pub struct LoopConfigToml {
 fn default_max_iterations() -> u32 {
     30
 }
+// v0.2 followup (peer-aligned with ReCLamO-Harness @ 9ac890d):
+//   600 -> 3,600 s run wall-clock; 90 -> 900 s per-sub-call; 64 -> 256 per run;
+//   24 -> 64 per exec; 2,048 -> 4,096 sub-call output. Root max_tokens is
+//   conditional on thinking (see `Profile::effective_root_max_output_tokens`).
 fn default_max_timeout() -> u64 {
-    600
+    3_600
 }
 fn default_subcall_timeout() -> u64 {
-    90
+    900
 }
 fn default_max_errors() -> u32 {
     3
 }
 fn default_max_subcalls_per_run() -> u32 {
-    64
+    256
 }
 fn default_max_subcalls_per_exec() -> u32 {
-    24
-}
-fn default_root_max_output() -> u32 {
-    4096
+    64
 }
 fn default_subcall_max_output() -> u32 {
-    2048
+    4_096
 }
 fn default_true() -> bool {
     true
@@ -170,7 +175,9 @@ impl Default for LoopConfigToml {
             max_errors: default_max_errors(),
             max_subcalls_per_run: default_max_subcalls_per_run(),
             max_subcalls_per_exec: default_max_subcalls_per_exec(),
-            root_max_output_tokens: default_root_max_output(),
+            // None → derive via `Profile::effective_root_max_output_tokens`
+            // (8,192 with thinking on, 4,096 off).
+            root_max_output_tokens: None,
             subcall_max_output_tokens: default_subcall_max_output(),
             route_by_size: default_true(),
             plain_query_margin: default_plain_margin(),
@@ -227,10 +234,51 @@ impl Profile {
             max_errors: self.loop_config.max_errors,
             max_subcalls_per_run: self.loop_config.max_subcalls_per_run,
             max_subcalls_per_exec: self.loop_config.max_subcalls_per_exec,
-            root_max_output_tokens: self.loop_config.root_max_output_tokens,
+            root_max_output_tokens: self.effective_root_max_output_tokens() as u32,
             subcall_max_output_tokens: self.loop_config.subcall_max_output_tokens,
             route_by_size: self.loop_config.route_by_size,
             plain_query_margin: self.loop_config.plain_query_margin,
+        }
+    }
+
+    /// Effective char budget per `llm_query` sub-call (the prompt mentions
+    /// this exact number). v0.2 followup, peer-aligned with
+    /// ReCLamO-Harness `RLMConfig.effective_subcall_chars` at config.py:313.
+    ///
+    /// Formula:
+    ///   advertised = (sub_window − sub.max_output) × (1 − SUBCALL_MARGIN)
+    ///               × SUBCALL_CHARS_PER_TOKEN
+    /// with `SUBCALL_MARGIN = 0.15` and `SUBCALL_CHARS_PER_TOKEN = 3`.
+    /// On pluto (32K window, sub max_tokens 4,096) that gives ~71,155.
+    /// An explicit `subcall_chars` in the profile wins. v0.1 profiles that
+    /// pinned 12,000 keep 12,000.
+    pub fn effective_subcall_chars(&self) -> u32 {
+        if let Some(c) = self.subcall_chars {
+            return c;
+        }
+        const SUBCALL_MARGIN: f64 = 0.15;
+        const SUBCALL_CHARS_PER_TOKEN: f64 = 3.0;
+        let sub_window = self.max_context;
+        let sub_max_output = self.loop_config.subcall_max_output_tokens as u64;
+        let raw = sub_window.saturating_sub(sub_max_output) as f64;
+        let advertised = raw * (1.0 - SUBCALL_MARGIN) * SUBCALL_CHARS_PER_TOKEN;
+        // Floor at 1,000 to avoid advertising "0 chars per call" on tiny
+        // windows; cap at 1,000,000 to keep the prompt from looking like a
+        // phone book. Real models stay well under both bounds.
+        advertised.clamp(1_000.0, 1_000_000.0) as u32
+    }
+
+    /// Effective root `max_tokens` for this profile. v0.2 followup,
+    /// peer-aligned: 8,192 with `thinking = enabled` (the root can use a
+    /// long CoT), 4,096 with anything else. An explicit
+    /// `loop_config.root_max_output_tokens` wins.
+    pub fn effective_root_max_output_tokens(&self) -> u64 {
+        if let Some(t) = self.loop_config.root_max_output_tokens {
+            return t as u64;
+        }
+        match self.thinking {
+            ThinkingMode::Enabled => 8_192,
+            _ => 4_096,
         }
     }
 
@@ -257,7 +305,9 @@ impl Profile {
         let _ = caps; // (capability hooks aren't read yet; future-proofing.)
         let mut p = ModelProfile::new(self.name.clone(), provider, self.max_context);
         p.resident_kv = self.resident_kv.unwrap_or(self.max_context);
-        p.subcall_chars = self.subcall_chars;
+        // v0.2 followup: derive per-call char budget from the sub-model's
+        // real window unless the profile pins an explicit value.
+        p.subcall_chars = self.effective_subcall_chars();
         p.presence_penalty = self.presence_penalty;
         p.thinking = self.thinking;
         p.temperature = self.temperature;
@@ -305,6 +355,15 @@ impl Default for LoopConfig {
 
 impl From<LoopConfigToml> for LoopConfig {
     fn from(t: LoopConfigToml) -> Self {
+        // `root_max_output_tokens` is `Option<u32>` on the TOML side because
+        // the v0.2 followup makes it conditional on `Profile::thinking`
+        // (8,192 enabled, 4,096 otherwise — see
+        // `Profile::effective_root_max_output_tokens`). A bare
+        // `LoopConfigToml::default()` has no profile to consult, so we
+        // fall back to 4,096 (the "thinking off" default). Production
+        // callers go through `Profile::loop_config()`, which DOES consult
+        // `Profile::thinking`.
+        let root_max_output_tokens = t.root_max_output_tokens.unwrap_or(4_096);
         Self {
             max_iterations: t.max_iterations,
             max_timeout: std::time::Duration::from_secs(t.max_timeout_secs),
@@ -313,7 +372,7 @@ impl From<LoopConfigToml> for LoopConfig {
             max_errors: t.max_errors,
             max_subcalls_per_run: t.max_subcalls_per_run,
             max_subcalls_per_exec: t.max_subcalls_per_exec,
-            root_max_output_tokens: t.root_max_output_tokens,
+            root_max_output_tokens,
             subcall_max_output_tokens: t.subcall_max_output_tokens,
             route_by_size: t.route_by_size,
             plain_query_margin: t.plain_query_margin,
@@ -364,26 +423,79 @@ mod tests {
         "#;
         let p: Profile = toml::from_str(toml).unwrap();
         assert_eq!(p.loop_config.max_iterations, 10);
-        assert_eq!(p.subcall_chars, 20_000);
+        // v0.2 followup: subcall_chars is `Option<u32>`; not set in the
+        // minimal profile, so `effective_subcall_chars()` derives from
+        // the (128K window, default 4,096 sub-max) formula.
+        assert_eq!(p.subcall_chars, None);
+        let expected = ((128_000u64 - 4_096) as f64 * 0.85 * 3.0) as u32;
+        assert_eq!(p.effective_subcall_chars(), expected);
         assert_eq!(p.thinking, ThinkingMode::Adaptive);
     }
 
     #[test]
     fn loop_config_defaults_match_upstream_rlm_v0_2() {
+        // Covers both the v0.2 port (30 max_iterations) and the v0.2 followup
+        // (bumped caps + longer budgets). Peer-aligned with ReCLamO-Harness
+        // config.py at 9ac890d.
         let c: LoopConfig = LoopConfigToml::default().into();
-        // Upstream rlm: _DEFAULT_MAX_ITERATIONS = 30.
         assert_eq!(c.max_iterations, 30);
         assert_eq!(c.max_errors, 3);
-        assert_eq!(c.max_subcalls_per_run, 64);
-        assert_eq!(c.max_subcalls_per_exec, 24);
+        // v0.2 followup:
+        assert_eq!(c.max_subcalls_per_run, 256);
+        assert_eq!(c.max_subcalls_per_exec, 64);
+        assert_eq!(c.max_timeout, std::time::Duration::from_secs(3_600));
+        assert_eq!(c.subcall_timeout, std::time::Duration::from_secs(900));
+        assert_eq!(c.subcall_max_output_tokens, 4_096);
+        // root_max_output_tokens is derived: 4,096 with thinking = Adaptive.
+        assert_eq!(c.root_max_output_tokens, 4_096);
     }
 
     #[test]
-    fn profile_default_subcall_chars_matches_repl_truncation() {
-        // The Python REPL's `llm_query` truncates at `subcall_chars` by default
-        // (see src/repl/worker.py). The TOML default must match, otherwise the
-        // prompt tells the model one number and the runtime enforces another.
-        assert_eq!(default_subcall_chars(), 20_000);
+    fn profile_effective_subcall_chars_uses_formula() {
+        // 100K window, default 4,096 sub-max → ~244,683 advertised chars.
+        // Verifies the v0.2 followup formula; this is the value the prompt
+        // mentions in `llm_query`'s `subcall_chars=` and the
+        // "Each call can read about N characters" line.
+        let p = minimal_profile(100_000, None, ThinkingMode::Adaptive);
+        let expected = ((100_000u64 - 4_096) as f64 * 0.85 * 3.0) as u32;
+        assert_eq!(p.effective_subcall_chars(), expected);
+    }
+
+    #[test]
+    fn profile_effective_subcall_chars_explicit_wins() {
+        // v0.1 profiles that pinned 12,000 must keep 12,000.
+        let p = minimal_profile(100_000, Some(12_000), ThinkingMode::Adaptive);
+        assert_eq!(p.effective_subcall_chars(), 12_000);
+    }
+
+    #[test]
+    fn profile_effective_subcall_chars_small_window_floored() {
+        // 2K window, 4,096 sub-max → saturating_sub = 0 → advertised = 0;
+        // clamp floors at 1,000 so the prompt still says "1,000" not "0".
+        let p = minimal_profile(2_000, None, ThinkingMode::Adaptive);
+        assert_eq!(p.effective_subcall_chars(), 1_000);
+    }
+
+    #[test]
+    fn profile_effective_root_max_output_tokens_thinking_on() {
+        let p = minimal_profile(32_000, None, ThinkingMode::Enabled);
+        assert_eq!(p.effective_root_max_output_tokens(), 8_192);
+    }
+
+    #[test]
+    fn profile_effective_root_max_output_tokens_thinking_off() {
+        let p = minimal_profile(32_000, None, ThinkingMode::Adaptive);
+        assert_eq!(p.effective_root_max_output_tokens(), 4_096);
+        let p = minimal_profile(32_000, None, ThinkingMode::Disabled);
+        assert_eq!(p.effective_root_max_output_tokens(), 4_096);
+    }
+
+    #[test]
+    fn profile_effective_root_max_output_tokens_explicit_wins() {
+        // 16,384 explicit should beat the 8,192 default.
+        let mut p = minimal_profile(32_000, None, ThinkingMode::Enabled);
+        p.loop_config.root_max_output_tokens = Some(16_384);
+        assert_eq!(p.effective_root_max_output_tokens(), 16_384);
     }
 
     #[test]
@@ -398,7 +510,8 @@ mod tests {
             api_key_cmd: None,
             max_context: 100_000,
             resident_kv: None,
-            subcall_chars: 20_000,
+            // v0.2 followup: subcall_chars is `Option<u32>`.
+            subcall_chars: Some(20_000),
             temperature: 0.7,
             top_p: 0.95,
             top_k: None,
@@ -411,5 +524,32 @@ mod tests {
         };
         assert_eq!(p.resolve_api_key().unwrap(), "secret-123");
         std::env::remove_var("RECLAMO_TEST_KEY");
+    }
+
+    fn minimal_profile(
+        max_context: u64,
+        subcall_chars: Option<u32>,
+        thinking: ThinkingMode,
+    ) -> Profile {
+        Profile {
+            name: "t".into(),
+            provider: "openai-compat".into(),
+            model: "x".into(),
+            base_url: None,
+            api_key_env: None,
+            api_key_cmd: None,
+            max_context,
+            resident_kv: None,
+            subcall_chars,
+            temperature: 0.7,
+            top_p: 0.95,
+            top_k: None,
+            max_output_tokens: None,
+            presence_penalty: None,
+            thinking,
+            capabilities: None,
+            extra_body: serde_json::Value::Null,
+            loop_config: LoopConfigToml::default(),
+        }
     }
 }
