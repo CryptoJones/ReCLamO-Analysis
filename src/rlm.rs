@@ -48,6 +48,35 @@ or `FINAL(...)` / `FINAL_VAR(...)`.";
 const LENGTH_STOP_REASON_BREADCRUMB: &str = "\
 Your last reply was cut off by the output limit. Continue it from where you left off.";
 
+/// Breadcrumb pushed to the conversation when the model emits
+/// `FINAL_VAR(<name>)` but `<name>` is not bound in the REPL.
+///
+/// The fix is twofold:
+///   1. **Enumerate the variables that actually exist.** Phase 7b Cerebex
+///      (2026-10-08) showed gemini-2.5-flash-lite hallucinates variable
+///      names; the strongest recovery signal is to name what's real and
+///      let it pick. ReCLamO-Harness does this; we now match.
+///   2. **Offer `FINAL(<literal>)` as an escape hatch.** `FINAL()` does
+///      not require the variable to exist, so a model that already has the
+///      answer in hand can emit it without another REPL commit. This is
+///      the cheapest recovery path and the one peer text (#2) explicitly
+///      asked for.
+fn format_final_var_missing_breadcrumb(name: &str, existing: &[String]) -> String {
+    let existing_str = if existing.is_empty() {
+        "(none)".to_string()
+    } else {
+        existing.join(", ")
+    };
+    format!(
+        "FINAL_VAR({name}): no variable named `{name}` exists in the REPL; \
+         existing variables: [{existing_str}]. \
+         Either: compute the variable then re-emit `FINAL_VAR({name})`, \
+         or just emit `FINAL(<answer>)` with the literal value — `FINAL()` does \
+         not require the variable to exist.\n\
+         Reply with one ```repl code block (or ```python) doing the work, then re-emit the FINAL."
+    )
+}
+
 pub async fn run(
     context: String,
     query: String,
@@ -260,14 +289,29 @@ pub async fn run(
                             )
                             .await;
                         }
-                        let fix = format!(
-                            "FINAL_VAR({name}) pointed at a variable that doesn't exist in the REPL. \
-                             Did you forget to commit it? Either:\n\
-                             - `<name> = <extracted value>` (or `commit(\"<extracted value>\")`) then `FINAL_VAR({name})`, or\n\
-                             - `answer = <value>` followed by `FINAL_VAR(answer)`.\n\
-                             Reply with one ```repl block (or ```python) committing the variable, then re-emit the FINAL_VAR."
-                        );
-                        messages.push(Message::user(fix));
+                        // Snapshot the REPL so the breadcrumb can name
+                        // the variables the model CAN actually point at.
+                        // Phase 7b Cerebex (2026-10-08) showed gemini
+                        // hallucinates variable names; the strongest
+                        // recovery signal is to enumerate what's real
+                        // and let it pick. ReCLamO-Harness does this;
+                        // we now match.
+                        let existing = repl
+                            .as_mut()
+                            .snapshot_state()
+                            .await
+                            .ok()
+                            .and_then(|v| v.as_object().cloned())
+                            .map(|m| {
+                                m.keys()
+                                    .filter(|k| !k.starts_with('_'))
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        messages.push(Message::user(format_final_var_missing_breadcrumb(
+                            name, &existing,
+                        )));
                         continue;
                     }
                 },
@@ -1001,6 +1045,50 @@ mod tests {
         // both approaches are valid.
         assert!(LENGTH_STOP_REASON_BREADCRUMB.contains("cut off"));
         assert!(LENGTH_STOP_REASON_BREADCRUMB.contains("Continue"));
+    }
+
+    #[test]
+    fn final_var_missing_breadcrumb_lists_existing_variables() {
+        // Peer item #2: when the model emits FINAL_VAR(<missing>) the
+        // breadcrumb must enumerate the variables the model can ACTUALLY
+        // point at, so the strongest recovery signal is to pick one of
+        // them. This is the change the v0.2-followup port lacked.
+        let s = format_final_var_missing_breadcrumb(
+            "answer",
+            &["answer".to_string(), "context".to_string()],
+        );
+        assert!(s.contains("FINAL_VAR(answer)"), "names the missing variable: {s}");
+        assert!(s.contains("answer, context"), "lists the existing variables verbatim: {s}");
+        assert!(s.contains("existing variables: [answer, context]"));
+    }
+
+    #[test]
+    fn final_var_missing_breadcrumb_uses_none_when_no_user_vars() {
+        // Edge case: the REPL has not bound anything the model can name
+        // (only bootstrap helpers like `__answer__`, which the snapshot
+        // filter strips via `!k.starts_with('_')`). The breadcrumb must
+        // say so explicitly so the model does not invent a name.
+        let s = format_final_var_missing_breadcrumb("answer", &[]);
+        assert!(s.contains("existing variables: [(none)]"));
+        assert!(s.contains("FINAL_VAR(answer)"));
+    }
+
+    #[test]
+    fn final_var_missing_breadcrumb_offers_final_escape_hatch() {
+        // Peer item #2, second half: the breadcrumb must offer
+        // `FINAL(<answer>)` as an escape hatch. `FINAL()` does not
+        // require the variable to exist, so a model that already has
+        // the answer in hand can emit it directly. This is the cheapest
+        // recovery path.
+        let s = format_final_var_missing_breadcrumb("answer", &["answer".to_string()]);
+        assert!(
+            s.contains("FINAL(<answer>)") || s.contains("`FINAL(<answer>)`"),
+            "must offer FINAL(<answer>) escape hatch: {s}"
+        );
+        assert!(
+            s.contains("not require the variable to exist"),
+            "must explain that FINAL() does not require the variable: {s}"
+        );
     }
 
     #[test]
